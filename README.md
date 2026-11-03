@@ -23,7 +23,11 @@ Work in progress (milestone M1/M2). What exists and is tested today:
 | OutLayer agent-custody wrapper, 1Click dry quotes, NEAR RPC verification | `src/lib/server/` | live checks via `npm run m0` |
 | Supabase schema with RLS lockdown, append-only ledger, job leasing | `supabase/migrations/` | 8 tests on in-memory Postgres |
 
-Not built yet: the agent runtime, order flow UI, owner console, policy builder and demo mode.
+| Agent runtime: plan → (buy dataset via the contract) → draft → deliver → settle, as idempotent jobs | `src/lib/server/agent/` | typecheck, build; live on testnet |
+| Order API with on-chain payment verification, approvals confirmation, NEAR Intents quote + labelled simulation | `src/app/api/` | build |
+| Storefront, live order page with proof of private inference, public ledger | `src/app/store`, `src/app/orders/[id]`, `src/app/ledger` | build |
+
+Not built yet: the owner console (approvals and kill switch in the browser), natural-language policy builder, wallet-connect payment, demo mode.
 
 ## How the money works
 
@@ -50,7 +54,7 @@ Every record has one status: `REAL` (confirmed on NEAR testnet, with a transacti
 ## Try it
 
 1. `npm install`
-2. `npm test` → see 49 TypeScript tests pass (domain logic, signature verification, database schema).
+2. `npm test` → see 51 TypeScript tests pass (domain logic, signature verification, database schema).
 3. `cd contract && cargo test --lib` → see 35 contract tests pass.
 4. Copy `.env.example` to `.env.local`, fill in testnet values, then `npm run m0` → see PASS/FAIL/SKIP for each live integration (read-only, plus one small inference call).
 5. `npm run dev` → open http://localhost:3000.

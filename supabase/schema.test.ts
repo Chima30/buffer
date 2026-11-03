@@ -6,9 +6,12 @@ import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { beforeAll, describe, expect, it } from "vitest";
 
-const sql = readFileSync(new URL("./migrations/20261103000000_init.sql", import.meta.url), "utf8")
-  // pgcrypto is preinstalled on Supabase; gen_random_uuid is core in PG13+.
-  .replace("create extension if not exists pgcrypto;", "");
+const sql =
+  readFileSync(new URL("./migrations/20261103000000_init.sql", import.meta.url), "utf8")
+    // pgcrypto is preinstalled on Supabase; gen_random_uuid is core in PG13+.
+    .replace("create extension if not exists pgcrypto;", "") +
+  "\n" +
+  readFileSync(new URL("./migrations/20261103010000_runtime.sql", import.meta.url), "utf8");
 
 let db: PGlite;
 let biz: string;
@@ -60,6 +63,23 @@ describe("schema", () => {
   it("rejects duplicate payment tx hashes and duplicate procurement keys", async () => {
     await db.query(`insert into payments (order_id, token_id, amount_units, sender_account, tx_hash) values ($1, 'usdc', 20000000, 'c.testnet', 'pay-1')`, [order]);
     await fails(`insert into payments (order_id, token_id, amount_units, sender_account, tx_hash) values ($1, 'usdc', 20000000, 'c.testnet', 'pay-1')`, [order]);
+  });
+
+  it("never double-counts an expense for the same evidence", async () => {
+    await db.query(`insert into expenses (order_id, category, amount_units, status, evidence_ref, reimburse_to) values ($1, 'inference', 1200, 'METERED', 'chat:1', 'owner')`, [order]);
+    await fails(`insert into expenses (order_id, category, amount_units, status, evidence_ref, reimburse_to) values ($1, 'inference', 1200, 'METERED', 'chat:1', 'owner')`, [order]);
+  });
+
+  it("keeps model outputs and order briefs private from anon", async () => {
+    await db.exec(`set role anon`);
+    try {
+      await fails(`select * from inference_outputs`);
+      await fails(`select brief from orders`);
+      const status = await db.query(`select state from public_order_status`);
+      expect(status.rows.length).toBeGreaterThan(0);
+    } finally {
+      await db.exec(`reset role`);
+    }
   });
 
   it("refuses mainnet businesses", async () => {

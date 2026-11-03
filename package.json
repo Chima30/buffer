@@ -11,7 +11,8 @@
     "typecheck": "next typegen && tsc --noEmit",
     "m0": "tsx scripts/m0-check.ts",
     "outlayer:register": "tsx scripts/outlayer-register.ts",
-    "outlayer:policy": "tsx scripts/outlayer-policy.ts"
+    "outlayer:policy": "tsx scripts/outlayer-policy.ts",
+    "seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
     "@outlayer/sdk": "0.1.0-alpha.4",

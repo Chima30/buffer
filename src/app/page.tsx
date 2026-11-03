@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { Money } from "@/components/money";
+import { SiteHeader } from "@/components/site-header";
 import { StatusBadge } from "@/components/status-badge";
 import { LEDGER_STATUSES } from "@/lib/domain/ledger";
 import { toUnits } from "@/lib/domain/money";
@@ -26,10 +28,7 @@ const steps = [
 export default function Home() {
   return (
     <main className="mx-auto w-full max-w-5xl px-5 py-10 sm:py-16">
-      <header className="flex items-center justify-between">
-        <span className="text-lg font-semibold tracking-tight">Buffer</span>
-        <span className="rounded-full border border-rule-strong px-2.5 py-0.5 font-mono text-xs text-ink-2">NEAR testnet</span>
-      </header>
+      <SiteHeader />
 
       <section className="mt-14 max-w-3xl">
         <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Humans set the rules. Agents run the business.</h1>
@@ -38,6 +37,10 @@ export default function Home() {
           while code it cannot change enforces the owner&apos;s limits on every transaction.
         </p>
         <p className="mt-3 text-ink-3">First business: the Verified Research Desk.</p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Link href="/store" className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-paper">Order a research brief</Link>
+          <Link href="/ledger" className="rounded-md border border-rule-strong px-4 py-2 text-sm">View the public ledger</Link>
+        </div>
       </section>
 
       <section className="mt-14 grid gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule sm:grid-cols-5">
