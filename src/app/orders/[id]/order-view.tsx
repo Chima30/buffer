@@ -5,6 +5,9 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
 import { SiteHeader } from "@/components/site-header";
 import { StatusBadge } from "@/components/status-badge";
+import { ReportMarkdown } from "@/components/report-markdown";
+import { txHashOf, useNearWallet } from "@/components/wallet";
+import { resolutionOf } from "@/lib/domain/ledger-view";
 import type { LedgerStatus } from "@/lib/domain/ledger";
 
 interface OrderData {
@@ -19,7 +22,7 @@ interface OrderData {
   brief: string | null;
   plan: { title: string; angles: string[]; use_dataset: boolean; dataset_reason: string } | null;
   transitions: { from_state: string | null; to_state: string; reason: string; at: string }[];
-  ledger: { event_type: string; status: LedgerStatus; amount_units: string | null; counterparty: string | null; tx_hash: string | null; explorer_url: string | null; details: Record<string, unknown>; at: string }[];
+  ledger: { order_id?: string | null; event_type: string; status: LedgerStatus; amount_units: string | null; counterparty: string | null; tx_hash: string | null; explorer_url: string | null; details: Record<string, unknown>; at: string }[];
   purchase: { status: string; amount_units: string } | null;
   report: { content: string; content_hash: string } | null;
   proofs: { purpose: string; model: string; chat_id: string; signature_kind: string | null; signing_address: string | null; verification_level: string; request_hash: string; response_hash: string; tokens_in: number; tokens_out: number; cost_usd_micros: string }[];
@@ -43,6 +46,7 @@ const EVENT_LABELS: Record<string, string> = {
   vendor_paid: "Vendor paid by the contract",
   purchase_blocked: "Purchase blocked by policy",
   purchase_rejected: "Purchase rejected",
+  purchase_rejected_by_owner: "Owner rejected the purchase",
   purchase_failed: "Purchase failed",
   order_fulfilled: "Report delivered, hash recorded on-chain",
   payout_owner: "Owner share (70%)",
@@ -156,9 +160,11 @@ function Progress({ state }: { state: string }) {
 }
 
 function PaymentPanel({ order, token, onPaid }: { order: OrderData; token: string; onPaid: () => void }) {
+  const wallet = useNearWallet();
   const storedPayer = useStoredPayer();
   const [payerInput, setPayer] = useState<string | null>(null);
-  const payer = payerInput ?? storedPayer;
+  const payer = payerInput ?? (wallet.signedAccountId || storedPayer);
+  const [paying, setPaying] = useState(false);
   const [txHash, setTxHash] = useState("");
   const [msg, setMsg] = useState<{ tone: "failed" | "pending" | "real"; text: string } | null>(null);
   const [quote, setQuote] = useState<{ origin: string; amountIn: string | null; decimals: number } | null>(null);
@@ -166,15 +172,50 @@ function PaymentPanel({ order, token, onPaid }: { order: OrderData; token: strin
   const orderMsg = JSON.stringify({ order_id: order.onchainOrderId, sku: order.sku }).replace(/"/g, '\\\\\\"');
   const command = `near --% contract call-function as-transaction ${order.tokenContract} ft_transfer_call json-args "{\\"receiver_id\\":\\"${order.contractId}\\",\\"amount\\":\\"${order.priceUnits}\\",\\"msg\\":\\"${orderMsg}\\"}" prepaid-gas "100 Tgas" attached-deposit "1 yoctoNEAR" sign-as ${payer || "<your-account>.testnet"} network-config testnet sign-with-keychain send`;
 
+  async function submitPayment(hash: string, sender: string) {
+    setMsg({ tone: "pending", text: "Checking the transaction on NEAR testnet…" });
+    for (let i = 0; i < 6; i++) {
+      const res = await fetch(`/api/orders/${order.id}/payment`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, txHash: hash, sender }) });
+      const j = await res.json();
+      if (res.ok) {
+        setMsg({ tone: "real", text: "Payment confirmed on-chain. The agent has started." });
+        onPaid();
+        return;
+      }
+      if (res.status !== 202) {
+        setMsg({ tone: "failed", text: j.error ?? "Could not verify the payment" });
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    setMsg({ tone: "pending", text: "The transaction is not final yet. Paste its ID below in a moment to retry." });
+  }
+
   async function confirm(e: React.FormEvent) {
     e.preventDefault();
-    setMsg({ tone: "pending", text: "Checking the transaction on NEAR testnet…" });
-    const res = await fetch(`/api/orders/${order.id}/payment`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, txHash: txHash.trim(), sender: payer.trim() }) });
-    const j = await res.json();
-    if (res.ok) {
-      setMsg({ tone: "real", text: "Payment confirmed on-chain. The agent has started." });
-      onPaid();
-    } else setMsg({ tone: res.status === 202 ? "pending" : "failed", text: j.error ?? "Could not verify the payment" });
+    await submitPayment(txHash.trim(), payer.trim());
+  }
+
+  async function payWithWallet() {
+    if (!wallet.signedAccountId) return wallet.signIn();
+    setPaying(true);
+    setMsg({ tone: "pending", text: "Approve the payment in your wallet…" });
+    try {
+      const outcome = await wallet.callFunctionRaw({
+        contractId: order.tokenContract,
+        method: "ft_transfer_call",
+        args: { receiver_id: order.contractId, amount: order.priceUnits, msg: JSON.stringify({ order_id: order.onchainOrderId, sku: order.sku }) },
+        gas: "100000000000000",
+        deposit: "1",
+      });
+      const hash = txHashOf(outcome);
+      if (!hash) throw new Error("The wallet did not return a transaction ID. Paste it below instead.");
+      await submitPayment(hash, wallet.signedAccountId);
+    } catch (err) {
+      setMsg({ tone: "failed", text: (err as Error).message || "The wallet did not complete the payment" });
+    } finally {
+      setPaying(false);
+    }
   }
 
   async function previewSol() {
@@ -187,18 +228,25 @@ function PaymentPanel({ order, token, onPaid }: { order: OrderData; token: strin
     <section className="mt-8 rounded-[var(--radius-card)] border border-rule bg-surface p-5">
       <h2 className="font-medium">Pay <Money units={order.priceUnits} /> to the business contract</h2>
       <p className="mt-1 text-sm text-ink-3">The payment goes into escrow at <span className="font-mono">{order.contractId}</span>, never to the agent. Wrong amounts are returned automatically.</p>
-      <label className="mt-4 block text-sm">
-        <span className="font-medium">Paying account</span>
-        <input value={payer} onChange={(e) => setPayer(e.target.value)} placeholder="yourname.testnet" className="mt-1 w-full rounded-md border border-rule-strong bg-paper p-2 font-mono text-sm" />
-      </label>
-      <p className="mt-4 text-sm font-medium">Run in PowerShell (near-cli):</p>
-      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-paper p-3 font-mono text-xs">{command}</pre>
-      <button type="button" onClick={() => navigator.clipboard.writeText(command)} className="mt-2 text-sm text-accent">Copy command</button>
+      <button type="button" onClick={payWithWallet} disabled={paying} className="mt-4 w-full rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-paper disabled:opacity-60 sm:w-auto">
+        {wallet.signedAccountId ? (paying ? "Waiting for wallet…" : `Pay 20 USDC from ${wallet.signedAccountId}`) : "Connect a NEAR testnet wallet to pay"}
+      </button>
+      <p className="mt-2 text-xs text-ink-3">Your account needs testnet USDC (free at faucet.circle.com, network NEAR Testnet) and a little testnet NEAR for fees.</p>
 
-      <form onSubmit={confirm} className="mt-5 flex flex-col gap-2 sm:flex-row">
-        <input required value={txHash} onChange={(e) => setTxHash(e.target.value)} placeholder="Paste the Transaction ID" className="flex-1 rounded-md border border-rule-strong bg-paper p-2 font-mono text-sm" />
-        <button className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-paper">Confirm payment</button>
-      </form>
+      <details className="mt-4 rounded-md border border-rule p-3">
+        <summary className="cursor-pointer text-sm text-ink-2">Pay from the command line instead (near-cli)</summary>
+        <label className="mt-3 block text-sm">
+          <span className="font-medium">Paying account</span>
+          <input value={payer} onChange={(e) => setPayer(e.target.value)} placeholder="yourname.testnet" className="mt-1 w-full rounded-md border border-rule-strong bg-paper p-2 font-mono text-sm" />
+        </label>
+        <p className="mt-3 text-sm font-medium">Run in PowerShell:</p>
+        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-paper p-3 font-mono text-xs">{command}</pre>
+        <button type="button" onClick={() => navigator.clipboard.writeText(command)} className="mt-2 text-sm text-accent">Copy command</button>
+        <form onSubmit={confirm} className="mt-4 flex flex-col gap-2 sm:flex-row">
+          <input required value={txHash} onChange={(e) => setTxHash(e.target.value)} placeholder="Paste the Transaction ID" className="flex-1 rounded-md border border-rule-strong bg-paper p-2 font-mono text-sm" />
+          <button className="rounded-md border border-rule-strong px-4 py-2 text-sm font-medium">Confirm payment</button>
+        </form>
+      </details>
       {msg && <Notice tone={msg.tone}>{msg.text}</Notice>}
 
       <div className="mt-6 border-t border-rule pt-4">
@@ -220,7 +268,7 @@ function PaymentPanel({ order, token, onPaid }: { order: OrderData; token: strin
 function Report({ report }: { report: { content: string; content_hash: string } }) {
   return (
     <Card title="Your research brief">
-      <article className="whitespace-pre-wrap text-sm leading-relaxed">{report.content}</article>
+      <ReportMarkdown content={report.content} />
     </Card>
   );
 }
@@ -232,19 +280,23 @@ function Ledger({ entries }: { entries: OrderData["ledger"] }) {
         <p className="text-sm text-ink-3">No activity yet.</p>
       ) : (
         <ul className="divide-y divide-rule text-sm">
-          {entries.map((e, i) => (
-            <li key={i} className="flex flex-col gap-1 py-2.5">
+          {entries.map((e, i) => {
+            const resolved = resolutionOf(e, entries);
+            return (
+            <li key={i} className={`flex flex-col gap-1 py-2.5 ${resolved ? "opacity-60" : ""}`}>
               <div className="flex items-center justify-between gap-2">
                 <span>{EVENT_LABELS[e.event_type] ?? e.event_type}</span>
                 <StatusBadge status={e.status} />
               </div>
+              {resolved && <span className="text-xs text-ink-3">Resolved: {(EVENT_LABELS[resolved.event_type] ?? resolved.event_type).toLowerCase()}</span>}
               <div className="flex items-center justify-between gap-2 text-xs text-ink-3">
                 <span className="truncate">{e.counterparty ?? ""}</span>
                 {e.amount_units && <Money units={e.amount_units} />}
               </div>
               {e.explorer_url && <a href={e.explorer_url} target="_blank" rel="noreferrer" className="font-mono text-xs text-accent">tx {e.tx_hash?.slice(0, 10)}… ↗</a>}
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </Card>

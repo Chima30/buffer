@@ -1,0 +1,256 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
+import { Money } from "@/components/money";
+import { SiteHeader } from "@/components/site-header";
+import { txHashOf, useNearWallet } from "@/components/wallet";
+
+interface Overview {
+  business: { id: string; name: string; status: "active" | "paused" } | null;
+  contract: { id: string; paused: boolean; owner: string; policyVersion: number; policyHash: string | null; approvalAboveUnits: string; contributor: string; contributorBps: number };
+  policy: { version: number; rules_hash: string; source_text: string | null; activated_at: string | null } | null;
+  policyAnchored: boolean;
+  agent: { id: string; name: string; role: string; near_account: string; status: "running" | "paused" | "frozen"; walletPubkey: string | null } | null;
+  totals: { revenue: string; vendorSpend: string; inferenceSpend: string; net: string; ownerPaid: string; contributorPaid: string };
+  pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string } }[];
+  orders: { id: string; onchain_order_id: string; state: string; price_units: string; created_at: string }[];
+  recentActions: { tool: string; decision: "allow" | "deny" | "needs_approval"; reasons: { code: string; message: string; ruleId?: string }[]; policy_version: number; at: string }[];
+}
+
+const OUTLAYER_CONTRACT = "outlayer.testnet";
+
+export default function OwnerConsole() {
+  const wallet = useNearWallet();
+  const [data, setData] = useState<Overview | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ tone: "real" | "failed" | "pending"; text: string } | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/owner/overview", { cache: "no-store" });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Could not load");
+      setData(j);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, []);
+
+  useEffect(() => {
+    const first = setTimeout(load, 0);
+    const t = setInterval(load, 8000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [load]);
+
+  const isOwner = !!data && wallet.signedAccountId === data.contract.owner;
+
+  /** Every owner action: wallet signs a real transaction, then the app verifies and records it. */
+  async function act(label: string, contractId: string, method: string, args: Record<string, unknown>, gas = "100000000000000") {
+    setBusy(label);
+    setNotice({ tone: "pending", text: `${label}: approve it in your wallet…` });
+    try {
+      const outcome = await wallet.callFunctionRaw({ contractId, method, args, gas, deposit: "0" });
+      const hash = txHashOf(outcome);
+      if (!hash) throw new Error("The wallet did not return a transaction ID");
+      setNotice({ tone: "pending", text: `${label}: confirming on NEAR testnet…` });
+      for (let i = 0; i < 6; i++) {
+        const res = await fetch("/api/owner/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ txHash: hash }) });
+        if (res.status !== 202) {
+          const j = await res.json();
+          if (!res.ok) throw new Error(j.error ?? "Could not record the action");
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 2500));
+      }
+      setNotice({ tone: "real", text: `${label}: done and recorded (tx ${hash.slice(0, 10)}…).` });
+      await load();
+    } catch (e) {
+      setNotice({ tone: "failed", text: `${label}: ${(e as Error).message}` });
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <main className="mx-auto w-full max-w-5xl px-5 py-10">
+      <SiteHeader />
+      <div className="mt-10 flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="font-mono text-xs uppercase tracking-wider text-ink-3">Owner console</p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data?.business?.name ?? "Business"}</h1>
+        </div>
+        {data && <StatusPill paused={data.contract.paused} agent={data.agent?.status ?? "paused"} />}
+      </div>
+
+      {!wallet.signedAccountId && <Banner tone="simulated">Viewing read-only. Connect the owner wallet to approve purchases or use the emergency controls.</Banner>}
+      {wallet.signedAccountId && data && !isOwner && <Banner tone="failed">Connected as {wallet.signedAccountId}. Only {data.contract.owner} can act; the contract would reject anyone else.</Banner>}
+      {notice && <Banner tone={notice.tone}>{notice.text}</Banner>}
+      {error && <Banner tone="failed">{error}</Banner>}
+      {!data && !error && <p className="mt-8 text-ink-3">Loading…</p>}
+
+      {data && (
+        <>
+          <section className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule sm:grid-cols-4">
+            <Stat label="Revenue received" units={data.totals.revenue} />
+            <Stat label="Paid to vendors" units={data.totals.vendorSpend} />
+            <Stat label="Inference cost" units={data.totals.inferenceSpend} />
+            <Stat label="Net" units={data.totals.net} />
+            <Stat label="Paid to owner" units={data.totals.ownerPaid} />
+            <Stat label="Paid to contributor" units={data.totals.contributorPaid} />
+            <div className="col-span-2 bg-surface p-4 text-sm">
+              <div className="text-ink-3">Split</div>
+              <div className="mt-1">{100 - data.contract.contributorBps / 100}% owner · {data.contract.contributorBps / 100}% contributor, on net revenue</div>
+            </div>
+          </section>
+
+          <div className="mt-6 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
+            <div className="space-y-6">
+              <Card title={`Approvals${data.pendingApprovals.length ? ` (${data.pendingApprovals.length})` : ""}`}>
+                {data.pendingApprovals.length === 0 ? (
+                  <p className="text-sm text-ink-3">Nothing waiting. Purchases above <Money units={data.contract.approvalAboveUnits} /> will appear here.</p>
+                ) : (
+                  <ul className="space-y-4">
+                    {data.pendingApprovals.map((p) => (
+                      <li key={p.id} className="rounded-md border border-rule p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium">{p.vendors.name}</span>
+                          <Money units={p.amount_units} />
+                        </div>
+                        <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-ink-3">
+                          <dt>Destination</dt><dd className="font-mono">{p.vendors.near_account}</dd>
+                          <dt>Order</dt><dd className="font-mono">{p.orders.onchain_order_id}, purchase #{p.onchain_index}</dd>
+                          <dt>Rule</dt><dd>Purchases above <Money units={data.contract.approvalAboveUnits} /> need the owner (A-1)</dd>
+                          <dt>Paid from</dt><dd>this order&apos;s escrow, by the contract</dd>
+                        </dl>
+                        <div className="mt-3 flex gap-2">
+                          <button disabled={!isOwner || !!busy} onClick={() => act("Approve purchase", data.contract.id, "approve_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index })} className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-paper disabled:opacity-40">Approve</button>
+                          <button disabled={!isOwner || !!busy} onClick={() => act("Reject purchase", data.contract.id, "reject_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index }, "30000000000000")} className="rounded-md border border-rule-strong px-3 py-1.5 text-sm disabled:opacity-40">Reject</button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+
+              <Card title="Recent orders">
+                {data.orders.length === 0 ? <p className="text-sm text-ink-3">No orders yet. <Link href="/store" className="text-accent">Open the store</Link>.</p> : (
+                  <ul className="divide-y divide-rule text-sm">
+                    {data.orders.map((o) => (
+                      <li key={o.id} className="flex items-center justify-between gap-2 py-2">
+                        <Link href={`/orders/${o.id}`} className="font-mono text-xs text-accent">{o.onchain_order_id}</Link>
+                        <span className="text-xs text-ink-2">{o.state.replace(/_/g, " ").toLowerCase()}</span>
+                        <Money units={o.price_units} />
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </Card>
+
+              <Card title="Agent decisions">
+                <ul className="divide-y divide-rule text-sm">
+                  {data.recentActions.map((a, i) => (
+                    <li key={i} className="py-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-xs">{a.tool}</span>
+                        <span className={`text-xs ${a.decision === "allow" ? "text-real" : a.decision === "deny" ? "text-failed" : "text-pending"}`}>{a.decision.replace("_", " ")}</span>
+                      </div>
+                      <p className="text-xs text-ink-3">{a.reasons.map((r) => r.message).join("; ")}</p>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            </div>
+
+            <div className="space-y-6">
+              <Card title="Emergency controls">
+                <p className="text-sm text-ink-2">Each control is a transaction you sign. The agent cannot undo it.</p>
+                <div className="mt-4 space-y-3">
+                  <Control
+                    title="Business contract"
+                    state={data.contract.paused ? "Paused: no payments, purchases or settlements" : "Active"}
+                    danger={!data.contract.paused}
+                    action={data.contract.paused ? "Resume" : "Pause business"}
+                    disabled={!isOwner || !!busy}
+                    onClick={() => act(data.contract.paused ? "Resume business" : "Pause business", data.contract.id, data.contract.paused ? "unpause" : "pause", {}, "30000000000000")}
+                  />
+                  <Control
+                    title="Agent wallet (OutLayer)"
+                    state={data.agent?.status === "frozen" ? "Frozen: OutLayer refuses to sign anything" : "Signing within policy"}
+                    danger={data.agent?.status !== "frozen"}
+                    action={data.agent?.status === "frozen" ? "Unfreeze" : "Freeze agent wallet"}
+                    disabled={!isOwner || !!busy || !data.agent?.walletPubkey}
+                    onClick={() => act(data.agent?.status === "frozen" ? "Unfreeze agent wallet" : "Freeze agent wallet", OUTLAYER_CONTRACT, data.agent?.status === "frozen" ? "unfreeze_wallet" : "freeze_wallet", { wallet_pubkey: data.agent?.walletPubkey }, "30000000000000")}
+                  />
+                </div>
+              </Card>
+
+              <Card title="Policy">
+                <p className="text-sm">
+                  Version {data.contract.policyVersion}{" "}
+                  {data.policyAnchored ? <span className="text-real">● matches the on-chain anchor</span> : <span className="text-failed">✕ does not match the on-chain anchor: the agent will not act</span>}
+                </p>
+                {data.policy?.source_text && <blockquote className="mt-3 border-l-2 border-rule-strong pl-3 text-sm text-ink-2">{data.policy.source_text}</blockquote>}
+                <p className="mt-3 break-all font-mono text-xs text-ink-3">sha256 {data.contract.policyHash}</p>
+              </Card>
+
+              <Card title="Agent">
+                <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
+                  <dt className="text-ink-3">Name</dt><dd>{data.agent?.name}</dd>
+                  <dt className="text-ink-3">Status</dt><dd>{data.agent?.status}</dd>
+                  <dt className="text-ink-3">Account</dt><dd className="truncate font-mono text-xs">{data.agent?.near_account}</dd>
+                  <dt className="text-ink-3">Can call</dt><dd className="font-mono text-xs">{data.contract.id} only</dd>
+                </dl>
+              </Card>
+            </div>
+          </div>
+        </>
+      )}
+    </main>
+  );
+}
+
+function StatusPill({ paused, agent }: { paused: boolean; agent: string }) {
+  const live = !paused && agent === "running";
+  return <span className={`rounded-full px-3 py-1 text-xs font-medium ${live ? "bg-real-soft text-real" : "bg-failed-soft text-failed"}`}>{live ? "● Operating" : paused ? "✕ Paused" : `✕ Agent ${agent}`}</span>;
+}
+
+function Stat({ label, units }: { label: string; units: string }) {
+  return (
+    <div className="bg-surface p-4">
+      <div className="text-xs text-ink-3">{label}</div>
+      <div className="mt-1 text-lg"><Money units={units} /></div>
+    </div>
+  );
+}
+
+function Control({ title, state, action, danger, disabled, onClick }: { title: string; state: string; action: string; danger: boolean; disabled: boolean; onClick: () => void }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-rule p-3">
+      <div>
+        <div className="text-sm font-medium">{title}</div>
+        <div className="text-xs text-ink-3">{state}</div>
+      </div>
+      <button disabled={disabled} onClick={onClick} className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium disabled:opacity-40 ${danger ? "bg-failed text-white" : "border border-rule-strong"}`}>{action}</button>
+    </div>
+  );
+}
+
+function Card({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="rounded-[var(--radius-card)] border border-rule bg-surface">
+      <h2 className="border-b border-rule px-5 py-3 font-medium">{title}</h2>
+      <div className="p-5">{children}</div>
+    </section>
+  );
+}
+
+function Banner({ tone, children }: { tone: "real" | "failed" | "pending" | "simulated"; children: React.ReactNode }) {
+  const cls = { failed: "bg-failed-soft text-failed", pending: "bg-pending-soft text-pending", real: "bg-real-soft text-real", simulated: "bg-simulated-soft text-simulated" }[tone];
+  return <p role="status" className={`mt-4 rounded-md p-3 text-sm ${cls}`}>{children}</p>;
+}

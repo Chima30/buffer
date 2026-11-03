@@ -38,6 +38,9 @@ export async function loadBusinessAnchored(): Promise<BusinessContext> {
   const ctx = await loadBusiness();
   const onchain = await getConfig();
   if (onchain.paused) throw new HaltError("Business contract is paused");
+  // Frozen or paused agents wait; their orders resume when the owner lifts it.
+  if (ctx.agent.status !== "running") throw new HaltError(`Agent is ${ctx.agent.status}`);
+  if (ctx.business.status !== "active") throw new HaltError("Business is paused");
   assertPolicyAnchored(ctx.policy, onchain.policy_hash);
   if (onchain.policy_version !== ctx.policy.version) throw new HaltError("Policy version on-chain differs from the active policy");
   return ctx;

@@ -5,6 +5,7 @@ import { Money } from "@/components/money";
 import { SiteHeader } from "@/components/site-header";
 import { StatusBadge } from "@/components/status-badge";
 import type { LedgerStatus } from "@/lib/domain/ledger";
+import { resolutionOf } from "@/lib/domain/ledger-view";
 
 interface Entry {
   id: number;
@@ -54,15 +55,18 @@ export default function LedgerPage() {
               <tr><th className="px-4 py-2 font-normal">Time (UTC)</th><th className="px-4 py-2 font-normal">Event</th><th className="px-4 py-2 font-normal">Status</th><th className="px-4 py-2 text-right font-normal">Amount</th><th className="px-4 py-2 font-normal">Evidence</th></tr>
             </thead>
             <tbody className="divide-y divide-rule">
-              {entries.map((e) => (
-                <tr key={e.id} className="flex flex-col gap-1 px-4 py-3 sm:table-row sm:px-0 sm:py-0">
+              {entries.map((e) => {
+                const resolved = resolutionOf(e, entries);
+                return (
+                <tr key={e.id} className={`flex flex-col gap-1 px-4 py-3 sm:table-row sm:px-0 sm:py-0 ${resolved ? "opacity-60" : ""}`}>
                   <td className="font-mono text-xs text-ink-3 sm:px-4 sm:py-2.5">{e.at.replace("T", " ").slice(0, 19)}</td>
                   <td className="sm:px-4 sm:py-2.5">{e.event_type.replace(/_/g, " ")}<div className="truncate text-xs text-ink-3">{e.counterparty}</div></td>
-                  <td className="sm:px-4 sm:py-2.5"><StatusBadge status={e.status} /></td>
+                  <td className="sm:px-4 sm:py-2.5"><StatusBadge status={e.status} />{resolved && <div className="mt-1 text-xs text-ink-3">resolved: {resolved.event_type.replace(/_/g, " ")}</div>}</td>
                   <td className="sm:px-4 sm:py-2.5 sm:text-right">{e.amount_units ? <Money units={e.amount_units} /> : <span className="text-ink-3">n/a</span>}</td>
                   <td className="sm:px-4 sm:py-2.5">{e.explorer_url ? <a href={e.explorer_url} target="_blank" rel="noreferrer" className="font-mono text-xs text-accent">{e.tx_hash?.slice(0, 10)}… ↗</a> : <span className="text-xs text-ink-3">none</span>}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

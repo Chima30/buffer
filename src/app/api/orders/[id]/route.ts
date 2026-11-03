@@ -14,7 +14,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
 
   const [transitions, ledger, approval] = await Promise.all([
     db().from("order_transitions").select("from_state,to_state,reason,at").eq("order_id", id).order("at"),
-    db().from("ledger_entries").select("event_type,status,amount_units,counterparty,tx_hash,explorer_url,details,at").eq("order_id", id).order("at"),
+    db().from("ledger_entries").select("order_id,event_type,status,amount_units,counterparty,tx_hash,explorer_url,details,at").eq("order_id", id).order("at"),
     db().from("procurements").select("status,amount_units,onchain_index").eq("order_id", id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
 
