@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  app:
+    name: App tests, typecheck, lint, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npx eslint .
+      - run: npx next build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  contract:
+    name: Contract tests and wasm build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: contract
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain from rust-toolchain.toml (includes wasm32 target)
+        run: rustup show active-toolchain || rustup toolchain install
+      - name: Install cargo-near
+        run: curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/cargo-near/releases/latest/download/cargo-near-installer.sh | sh
+      - run: cargo test --lib
+      - run: cargo near build non-reproducible-wasm
+      - name: Record wasm checksum
+        run: sha256sum target/near/buffer_desk.wasm | tee target/near/buffer_desk.wasm.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buffer_desk-wasm
+          path: |
+            contract/target/near/buffer_desk.wasm
+            contract/target/near/buffer_desk.wasm.sha256
+          if-no-files-found: error

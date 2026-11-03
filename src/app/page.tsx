@@ -1,69 +1,104 @@
-import Image from "next/image";
+import { Money } from "@/components/money";
+import { StatusBadge } from "@/components/status-badge";
+import { LEDGER_STATUSES } from "@/lib/domain/ledger";
+import { toUnits } from "@/lib/domain/money";
+import { computeSettlement } from "@/lib/domain/revenue";
+
+// A worked example computed by the same engine the contract mirrors. Labelled as an example, not activity.
+const example = computeSettlement({
+  gross: toUnits("20"),
+  maxExpense: toUnits("13"),
+  contributorBps: 3000,
+  expenses: [
+    { id: "dataset", category: "supplier", amount: toUnits("12"), status: "PAID", evidenceRef: "tx" },
+    { id: "inference", category: "inference", amount: toUnits("0.4"), status: "METERED", evidenceRef: "chat" },
+  ],
+});
+
+const steps = [
+  ["Order", "A customer orders a research report and writes a brief."],
+  ["Payment", "Testnet USDC goes straight to the business contract, not to the agent."],
+  ["Work", "The agent plans, has the contract pay an approved vendor, and runs private inference."],
+  ["Delivery", "The report ships with a signature showing which model produced it."],
+  ["Settlement", "The contract deducts expenses, then splits net revenue 70/30."],
+] as const;
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="mx-auto w-full max-w-5xl px-5 py-10 sm:py-16">
+      <header className="flex items-center justify-between">
+        <span className="text-lg font-semibold tracking-tight">Buffer</span>
+        <span className="rounded-full border border-rule-strong px-2.5 py-0.5 font-mono text-xs text-ink-2">NEAR testnet</span>
+      </header>
+
+      <section className="mt-14 max-w-3xl">
+        <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Humans set the rules. Agents run the business.</h1>
+        <p className="mt-5 text-lg leading-relaxed text-ink-2">
+          Buffer lets an AI agent operate a business on NEAR, selling, buying, delivering and paying out revenue,
+          while code it cannot change enforces the owner&apos;s limits on every transaction.
+        </p>
+        <p className="mt-3 text-ink-3">First business: the Verified Research Desk.</p>
+      </section>
+
+      <section className="mt-14 grid gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule sm:grid-cols-5">
+        {steps.map(([title, body], i) => (
+          <div key={title} className="bg-surface p-4">
+            <div className="font-mono text-xs text-ink-3">0{i + 1}</div>
+            <div className="mt-1 font-medium">{title}</div>
+            <p className="mt-1 text-sm leading-snug text-ink-2">{body}</p>
+          </div>
+        ))}
+      </section>
+
+      <section className="mt-14 grid gap-8 lg:grid-cols-[1.2fr_1fr]">
+        <div className="rounded-[var(--radius-card)] border border-rule bg-surface">
+          <div className="border-b border-rule px-5 py-3">
+            <h2 className="font-medium">How revenue is split</h2>
+            <p className="text-sm text-ink-3">Worked example, computed by the settlement engine. Not live activity.</p>
+          </div>
+          <dl className="divide-y divide-rule text-sm">
+            {[
+              ["Gross paid by customer", example.gross],
+              ["Approved expenses (capped)", example.expensesCounted],
+              ["Distributable (net)", example.distributable],
+              ["Owner, 70%", example.ownerShare],
+              ["Contributor, 30%", example.contributorShare],
+              ["Paid to vendor from escrow (dataset)", example.paidToVendors],
+              ["Reimbursed to owner (inference credits)", example.reimbOwner],
+            ].map(([label, units]) => (
+              <div key={label as string} className="flex items-center justify-between px-5 py-2.5">
+                <dt className="text-ink-2">{label as string}</dt>
+                <dd><Money units={units as bigint} /></dd>
+              </div>
+            ))}
+          </dl>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="rounded-[var(--radius-card)] border border-rule bg-surface p-5">
+          <h2 className="font-medium">Every record says what it is</h2>
+          <p className="mt-1 text-sm text-ink-3">Buffer never presents a quote or a simulation as a transaction.</p>
+          <ul className="mt-4 space-y-3">
+            {LEDGER_STATUSES.map((s) => (
+              <li key={s} className="flex items-center gap-3 text-sm">
+                <StatusBadge status={s} />
+                <span className="text-ink-2">
+                  {{
+                    REAL: "Confirmed on NEAR testnet, with an explorer link.",
+                    QUOTE: "A live NEAR Intents price. No funds moved.",
+                    SIMULATED: "NEAR Intents has no testnet, so cross-chain settlement is shown, not performed.",
+                    PENDING: "Submitted, waiting for confirmation.",
+                    FAILED: "Did not complete. Nothing is assumed.",
+                  }[s]}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
-      </main>
-    </div>
+      </section>
+
+      <footer className="mt-16 border-t border-rule pt-6 text-sm text-ink-3">
+        Built at NEAR HACKATHON 2026. Testnet only. No real funds.
+      </footer>
+    </main>
   );
 }

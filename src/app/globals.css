@@ -1,26 +1,84 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * Buffer design tokens. Ledger-first: near-monochrome ink on paper, one accent,
+ * and fixed status colours that always appear with a text label and icon.
+ */
+@theme {
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-paper: #f7f6f3;
+  --color-surface: #ffffff;
+  --color-ink: #16171a;
+  --color-ink-2: #45474d;
+  --color-ink-3: #7a7d85;
+  --color-rule: #e3e1dc;
+  --color-rule-strong: #cfccc5;
+
+  --color-accent: #1f4fd6;
+  --color-accent-soft: #e8eefc;
+
+  --color-real: #137a43;
+  --color-real-soft: #e4f4ea;
+  --color-quote: #1f5fbf;
+  --color-quote-soft: #e6eefb;
+  --color-simulated: #5d6068;
+  --color-simulated-soft: #eeeeec;
+  --color-pending: #9a5b00;
+  --color-pending-soft: #fbf0dc;
+  --color-failed: #b42318;
+  --color-failed-soft: #fbe7e5;
+
+  --radius-card: 10px;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --color-paper: #101113;
+    --color-surface: #17181b;
+    --color-ink: #ececea;
+    --color-ink-2: #b8b9bc;
+    --color-ink-3: #8a8c92;
+    --color-rule: #2a2c30;
+    --color-rule-strong: #3a3c41;
+    --color-accent: #7c9cff;
+    --color-accent-soft: #1c2440;
+    --color-real: #5fd08f;
+    --color-real-soft: #12291d;
+    --color-quote: #7fb0ff;
+    --color-quote-soft: #142139;
+    --color-simulated: #a3a5ab;
+    --color-simulated-soft: #222428;
+    --color-pending: #f0b65a;
+    --color-pending-soft: #2e2412;
+    --color-failed: #ff8a80;
+    --color-failed-soft: #341816;
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hatched fill marks simulated records so they never read as real. */
+.hatched {
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0 5px,
+    color-mix(in srgb, var(--color-simulated) 18%, transparent) 5px 6px
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }

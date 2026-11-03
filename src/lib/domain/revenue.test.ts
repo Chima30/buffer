@@ -1,0 +1,119 @@
+import { describe, expect, it } from "vitest";
+import { toUnits } from "./money";
+import { computeRefund, computeSettlement, SettlementBlockedError, type ExpenseInput } from "./revenue";
+
+const exp = (over: Partial<ExpenseInput>): ExpenseInput => ({
+  id: over.id ?? "e1",
+  category: over.category ?? "supplier",
+  amount: over.amount ?? toUnits("1"),
+  status: over.status ?? (over.category === "inference" ? "METERED" : "PAID"),
+  evidenceRef: over.evidenceRef === undefined ? "tx:abc" : over.evidenceRef,
+});
+
+const demo = [
+  exp({ id: "dataset", category: "supplier", amount: toUnits("12") }),
+  exp({ id: "llm", category: "inference", amount: toUnits("0.4"), evidenceRef: "chat:1" }),
+];
+
+describe("computeSettlement (formula v2, mirrors the contract)", () => {
+  it("matches the demo numbers and the contract unit test", () => {
+    const r = computeSettlement({ gross: toUnits("20"), maxExpense: toUnits("13"), contributorBps: 3000, expenses: demo });
+    expect(r.paidToVendors).toBe(toUnits("12"));
+    expect(r.expensesCounted).toBe(toUnits("12.4"));
+    expect(r.distributable).toBe(toUnits("7.6"));
+    expect(r.contributorShare).toBe(toUnits("2.28"));
+    expect(r.ownerShare).toBe(toUnits("5.32"));
+    expect(r.reimbOwner).toBe(toUnits("0.4"));
+    expect(r.legs.map((l) => l.leg)).toEqual(["owner", "contributor", "reimb_owner"]);
+    expect(r.overCap).toBe(false);
+  });
+
+  it("caps inference reimbursement at the expense cap and flags the rest", () => {
+    const r = computeSettlement({
+      gross: toUnits("20"),
+      maxExpense: toUnits("13"),
+      contributorBps: 3000,
+      expenses: [demo[0], exp({ id: "llm", category: "inference", amount: toUnits("5") })],
+    });
+    expect(r.expensesCounted).toBe(toUnits("13"));
+    expect(r.reimbOwner).toBe(toUnits("1"));
+    expect(r.expensesUncounted).toBe(toUnits("4"));
+    expect(r.overCap).toBe(true);
+  });
+
+  it("refuses vendor payments above the cap (the contract cannot produce them)", () => {
+    expect(() =>
+      computeSettlement({ gross: toUnits("20"), maxExpense: toUnits("10"), contributorBps: 3000, expenses: [demo[0]] }),
+    ).toThrow(/exceed the expense cap/);
+  });
+
+  it("blocks settlement while an expense is pending", () => {
+    expect(() =>
+      computeSettlement({ gross: toUnits("20"), maxExpense: toUnits("13"), contributorBps: 3000, expenses: [exp({ id: "p", status: "PENDING" })] }),
+    ).toThrow(SettlementBlockedError);
+  });
+
+  it("excludes rejected, failed-status and evidence-less expenses", () => {
+    const r = computeSettlement({
+      gross: toUnits("20"),
+      maxExpense: toUnits("13"),
+      contributorBps: 3000,
+      expenses: [
+        exp({ id: "rej", status: "REJECTED" }),
+        exp({ id: "noev", category: "inference", evidenceRef: null }),
+        exp({ id: "wrongstatus", category: "inference", status: "PAID" }),
+      ],
+    });
+    expect(r.expensesCounted).toBe(0n);
+    expect(r.excludedExpenseIds.sort()).toEqual(["noev", "rej", "wrongstatus"]);
+  });
+
+  it("gives rounding dust to the owner", () => {
+    const r = computeSettlement({ gross: 7n, maxExpense: 0n, contributorBps: 3000, expenses: [] });
+    expect(r.contributorShare).toBe(2n);
+    expect(r.ownerShare).toBe(5n);
+  });
+
+  it("rejects invalid inputs", () => {
+    expect(() => computeSettlement({ gross: 0n, maxExpense: 0n, contributorBps: 3000, expenses: [] })).toThrow();
+    expect(() => computeSettlement({ gross: 10n, maxExpense: 0n, contributorBps: 10001, expenses: [] })).toThrow();
+    expect(() => computeSettlement({ gross: 10n, maxExpense: 0n, contributorBps: 30.5, expenses: [] })).toThrow();
+  });
+
+  it("holds the sum invariant across many generated cases", () => {
+    let seed = 42;
+    const rand = (max: number) => {
+      seed = (seed * 1103515245 + 12345) % 2 ** 31;
+      return seed % max;
+    };
+    for (let i = 0; i < 5000; i++) {
+      const gross = BigInt(1 + rand(100_000_000));
+      const rawCap = BigInt(rand(100_000_000));
+      const cap = rawCap > gross ? gross : rawCap;
+      const vendor = cap === 0n ? 0n : BigInt(rand(Number(cap) + 1));
+      const expenses: ExpenseInput[] = [
+        exp({ id: "v", category: "supplier", amount: vendor }),
+        exp({ id: "i", category: "inference", amount: BigInt(rand(50_000_000)) }),
+      ];
+      const r = computeSettlement({ gross, maxExpense: cap, contributorBps: rand(10_001), expenses });
+      expect(r.paidToVendors + r.reimbOwner + r.contributorShare + r.ownerShare).toBe(gross);
+      expect(r.expensesCounted <= cap).toBe(true);
+    }
+  });
+});
+
+describe("computeRefund", () => {
+  it("makes the customer whole and tells the owner how much to top up", () => {
+    const r = computeRefund(toUnits("20"), demo);
+    expect(r.refundToCustomer).toBe(toUnits("20"));
+    expect(r.escrowAvailable).toBe(toUnits("8"));
+    expect(r.ownerTopUpRequired).toBe(toUnits("12"));
+    expect(r.unrecoveredLoss).toBe(toUnits("12.4"));
+  });
+
+  it("needs no top-up when nothing was bought", () => {
+    const r = computeRefund(toUnits("20"), []);
+    expect(r.escrowAvailable).toBe(toUnits("20"));
+    expect(r.ownerTopUpRequired).toBe(0n);
+  });
+});
