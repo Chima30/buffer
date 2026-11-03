@@ -509,7 +509,11 @@ impl Contract {
 
     /// Settles a fulfilled order exactly once. `claims` may contain only
     /// inference claims; vendor costs are already recorded on-chain.
-    pub fn settle(&mut self, order_id: String, claims: Vec<ExpenseClaim>) -> Promise {
+    ///
+    /// Each payout leg is its own promise chain (ft_transfer -> on_leg_resolved)
+    /// and is detached rather than returned: NEAR forbids returning a joint
+    /// promise (`a.and(b)`), so combining the legs would make settlement panic.
+    pub fn settle(&mut self, order_id: String, claims: Vec<ExpenseClaim>) {
         self.assert_agent_or_owner();
         require!(!self.paused, "paused");
         require!(claims.len() <= MAX_CLAIMS, "too many claims");
@@ -548,12 +552,9 @@ impl Contract {
             "contributor_bps": self.contributor_bps,
         }));
 
-        let mut promise: Option<Promise> = None;
         for (i, leg) in legs.iter().enumerate() {
-            let p = self.send_leg(&order_id, i as u32, leg);
-            promise = Some(match promise { None => p, Some(acc) => acc.and(p) });
+            self.send_leg(&order_id, i as u32, leg).detach();
         }
-        promise.expect("no legs to pay")
     }
 
     /// Re-sends one failed leg. Never re-runs the whole settlement.

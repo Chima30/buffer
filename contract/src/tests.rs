@@ -258,7 +258,7 @@ fn full_settlement_lifecycle() {
     let mut c = setup();
     paid_with_purchase(&mut c);
     as_agent(|| c.mark_fulfilled("o-1".into(), "a".repeat(64)));
-    let _ = as_agent(|| c.settle("o-1".into(), inference(400_000)));
+    as_agent(|| c.settle("o-1".into(), inference(400_000)));
     let o = c.get_order("o-1".into()).unwrap();
     assert_eq!(o.state, OrderState::Settling);
     let legs: Vec<(LegKind, u128)> = o.legs.iter().map(|l| (l.kind, l.amount.0)).collect();
@@ -276,7 +276,7 @@ fn settle_rejects_supplier_claims() {
     paid_with_purchase(&mut c);
     as_agent(|| c.mark_fulfilled("o-1".into(), "a".repeat(64)));
     let claims = vec![ExpenseClaim { category: ExpenseCategory::Supplier, amount: U128(USDC), evidence_ref: "x".into() }];
-    let _ = as_agent(|| c.settle("o-1".into(), claims));
+    as_agent(|| c.settle("o-1".into(), claims));
 }
 
 #[test]
@@ -285,8 +285,8 @@ fn cannot_settle_twice() {
     let mut c = setup();
     paid_with_purchase(&mut c);
     as_agent(|| c.mark_fulfilled("o-1".into(), "a".repeat(64)));
-    let _ = as_agent(|| c.settle("o-1".into(), inference(400_000)));
-    let _ = as_agent(|| c.settle("o-1".into(), inference(400_000)));
+    as_agent(|| c.settle("o-1".into(), inference(400_000)));
+    as_agent(|| c.settle("o-1".into(), inference(400_000)));
 }
 
 #[test]
@@ -294,7 +294,7 @@ fn cannot_settle_twice() {
 fn cannot_settle_before_fulfilment() {
     let mut c = setup();
     pay(&mut c, "o-1", 20 * USDC);
-    let _ = as_agent(|| c.settle("o-1".into(), inference(1)));
+    as_agent(|| c.settle("o-1".into(), inference(1)));
 }
 
 #[test]
@@ -302,7 +302,7 @@ fn failed_leg_can_be_retried_alone() {
     let mut c = setup();
     paid_with_purchase(&mut c);
     as_agent(|| c.mark_fulfilled("o-1".into(), "a".repeat(64)));
-    let _ = as_agent(|| c.settle("o-1".into(), inference(400_000)));
+    as_agent(|| c.settle("o-1".into(), inference(400_000)));
     resolve_leg(&mut c, "o-1", 0, true);
     resolve_leg(&mut c, "o-1", 1, false);
     resolve_leg(&mut c, "o-1", 2, true);
@@ -321,7 +321,7 @@ fn cannot_retry_confirmed_leg() {
     let mut c = setup();
     paid_with_purchase(&mut c);
     as_agent(|| c.mark_fulfilled("o-1".into(), "a".repeat(64)));
-    let _ = as_agent(|| c.settle("o-1".into(), inference(400_000)));
+    as_agent(|| c.settle("o-1".into(), inference(400_000)));
     resolve_leg(&mut c, "o-1", 0, true);
     let _ = as_agent(|| c.retry_leg("o-1".into(), 0));
 }
