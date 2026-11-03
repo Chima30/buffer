@@ -20,6 +20,12 @@ interface Overview {
 
 const OUTLAYER_CONTRACT = "outlayer.testnet";
 
+/** near-cli command for Windows PowerShell; --% keeps the JSON quotes intact. */
+function cliCommand(contractId: string, method: string, args: Record<string, unknown>, signer: string, gas = "100 Tgas") {
+  const json = JSON.stringify(args).replace(/"/g, '\\"');
+  return `near --% contract call-function as-transaction ${contractId} ${method} json-args "${json}" prepaid-gas "${gas}" attached-deposit "0 NEAR" sign-as ${signer} network-config testnet sign-with-keychain send`;
+}
+
 export default function OwnerConsole() {
   const wallet = useNearWallet();
   const [data, setData] = useState<Overview | null>(null);
@@ -50,6 +56,34 @@ export default function OwnerConsole() {
 
   const isOwner = !!data && wallet.signedAccountId === data.contract.owner;
 
+  /** Verify an owner-signed transaction on-chain, then record it. Used by wallet and near-cli paths. */
+  async function recordTx(label: string, hash: string) {
+    setNotice({ tone: "pending", text: `${label}: confirming on NEAR testnet…` });
+    for (let i = 0; i < 6; i++) {
+      const res = await fetch("/api/owner/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ txHash: hash }) });
+      if (res.status !== 202) {
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error ?? "Could not record the action");
+        setNotice({ tone: "real", text: `${label}: done and recorded (tx ${hash.slice(0, 10)}…).` });
+        await load();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2500));
+    }
+    throw new Error("Transaction not final yet; paste it again in a moment");
+  }
+
+  async function recordPasted(label: string, hash: string) {
+    setBusy(label);
+    try {
+      await recordTx(label, hash.trim());
+    } catch (e) {
+      setNotice({ tone: "failed", text: `${label}: ${(e as Error).message}` });
+    } finally {
+      setBusy(null);
+    }
+  }
+
   /** Every owner action: wallet signs a real transaction, then the app verifies and records it. */
   async function act(label: string, contractId: string, method: string, args: Record<string, unknown>, gas = "100000000000000") {
     setBusy(label);
@@ -58,18 +92,7 @@ export default function OwnerConsole() {
       const outcome = await wallet.callFunctionRaw({ contractId, method, args, gas, deposit: "0" });
       const hash = txHashOf(outcome);
       if (!hash) throw new Error("The wallet did not return a transaction ID");
-      setNotice({ tone: "pending", text: `${label}: confirming on NEAR testnet…` });
-      for (let i = 0; i < 6; i++) {
-        const res = await fetch("/api/owner/confirm", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ txHash: hash }) });
-        if (res.status !== 202) {
-          const j = await res.json();
-          if (!res.ok) throw new Error(j.error ?? "Could not record the action");
-          break;
-        }
-        await new Promise((r) => setTimeout(r, 2500));
-      }
-      setNotice({ tone: "real", text: `${label}: done and recorded (tx ${hash.slice(0, 10)}…).` });
-      await load();
+      await recordTx(label, hash);
     } catch (e) {
       setNotice({ tone: "failed", text: `${label}: ${(e as Error).message}` });
     } finally {
@@ -132,6 +155,12 @@ export default function OwnerConsole() {
                           <button disabled={!isOwner || !!busy} onClick={() => act("Approve purchase", data.contract.id, "approve_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index })} className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-paper disabled:opacity-40">Approve</button>
                           <button disabled={!isOwner || !!busy} onClick={() => act("Reject purchase", data.contract.id, "reject_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index }, "30000000000000")} className="rounded-md border border-rule-strong px-3 py-1.5 text-sm disabled:opacity-40">Reject</button>
                         </div>
+                        <CliFallback
+                          label="Approve purchase"
+                          command={cliCommand(data.contract.id, "approve_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index }, data.contract.owner)}
+                          busy={!!busy}
+                          onSubmit={(h) => recordPasted("Approve purchase", h)}
+                        />
                       </li>
                     ))}
                   </ul>
@@ -188,6 +217,20 @@ export default function OwnerConsole() {
                     onClick={() => act(data.agent?.status === "frozen" ? "Unfreeze agent wallet" : "Freeze agent wallet", OUTLAYER_CONTRACT, data.agent?.status === "frozen" ? "unfreeze_wallet" : "freeze_wallet", { wallet_pubkey: data.agent?.walletPubkey }, "30000000000000")}
                   />
                 </div>
+                <CliFallback
+                  label={data.contract.paused ? "Resume business" : "Pause business"}
+                  command={cliCommand(data.contract.id, data.contract.paused ? "unpause" : "pause", {}, data.contract.owner, "30 Tgas")}
+                  busy={!!busy}
+                  onSubmit={(h) => recordPasted(data.contract.paused ? "Resume business" : "Pause business", h)}
+                />
+                {data.agent?.walletPubkey && (
+                  <CliFallback
+                    label={data.agent.status === "frozen" ? "Unfreeze agent wallet" : "Freeze agent wallet"}
+                    command={cliCommand(OUTLAYER_CONTRACT, data.agent.status === "frozen" ? "unfreeze_wallet" : "freeze_wallet", { wallet_pubkey: data.agent.walletPubkey }, data.contract.owner, "30 Tgas")}
+                    busy={!!busy}
+                    onSubmit={(h) => recordPasted(data.agent?.status === "frozen" ? "Unfreeze agent wallet" : "Freeze agent wallet", h)}
+                  />
+                )}
               </Card>
 
               <Card title="Policy">
@@ -212,6 +255,27 @@ export default function OwnerConsole() {
         </>
       )}
     </main>
+  );
+}
+
+function CliFallback({ label, command, busy, onSubmit }: { label: string; command: string; busy: boolean; onSubmit: (txHash: string) => void }) {
+  const [hash, setHash] = useState("");
+  return (
+    <details className="mt-3 rounded-md border border-rule p-3">
+      <summary className="cursor-pointer text-xs text-ink-2">{label} with near-cli instead</summary>
+      <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-paper p-2 font-mono text-[11px]">{command}</pre>
+      <button type="button" onClick={() => navigator.clipboard.writeText(command)} className="mt-1 text-xs text-accent">Copy command</button>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (hash.trim()) onSubmit(hash);
+        }}
+        className="mt-2 flex flex-col gap-2 sm:flex-row"
+      >
+        <input value={hash} onChange={(e) => setHash(e.target.value)} placeholder="Paste the Transaction ID" className="flex-1 rounded-md border border-rule-strong bg-paper p-1.5 font-mono text-xs" />
+        <button disabled={busy} className="rounded-md border border-rule-strong px-3 py-1.5 text-xs disabled:opacity-40">Record</button>
+      </form>
+    </details>
   );
 }
 
