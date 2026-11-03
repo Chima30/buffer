@@ -13,8 +13,8 @@ jobs:
     name: App tests, typecheck, lint, build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
@@ -33,7 +33,7 @@ jobs:
       run:
         working-directory: contract
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install toolchain from rust-toolchain.toml (includes wasm32 target)
         run: rustup show active-toolchain || rustup toolchain install
       - name: Install cargo-near
@@ -42,7 +42,7 @@ jobs:
       - run: cargo near build non-reproducible-wasm
       - name: Record wasm checksum
         run: sha256sum target/near/buffer_desk.wasm | tee target/near/buffer_desk.wasm.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: buffer_desk-wasm
           path: |
