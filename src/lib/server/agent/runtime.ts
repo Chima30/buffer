@@ -215,7 +215,7 @@ async function stepDraft(order: OrderRow, ctx: BusinessContext): Promise<StepRes
   return { next: "deliver" };
 }
 
-async function stepDeliver(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
+async function stepDeliver(order: OrderRow, ctx: BusinessContext, attempt: number): Promise<StepResult> {
   const report = must(await db().from("reports").select("content_hash").eq("order_id", order.id).single(), "report");
   const sale = { tool: "deliver_report" as const, agentId: ctx.agent.id, orderId: order.id, sku: ctx.product.sku, priceUnits: BigInt(order.price_units) };
   const decision = evaluate(ctx.policy, sale, await evaluationContext(ctx));
@@ -225,7 +225,9 @@ async function stepDeliver(order: OrderRow, ctx: BusinessContext): Promise<StepR
 
   const onchain = await getOrder(order.onchain_order_id);
   if (onchain?.state === "Paid") {
-    const res = await execContractCall({ method: "mark_fulfilled", args: { order_id: order.onchain_order_id, report_hash: report.content_hash }, idempotencyKey: key, agentAccount: ctx.agent.near_account });
+    // Fresh OutLayer key per attempt: a failed request is cached under its key, and the
+    // contract itself refuses a second mark_fulfilled, so retries cannot double-act.
+    const res = await execContractCall({ method: "mark_fulfilled", args: { order_id: order.onchain_order_id, report_hash: report.content_hash }, idempotencyKey: `${key}:a${attempt}`, agentAccount: ctx.agent.near_account });
     if (res.state === "PENDING") return { repeat: true, delaySec: 10 };
     if (res.state === "FAILED") throw new Error(`mark_fulfilled failed: ${res.reason}`);
     await writeLedger({ businessId: order.business_id, orderId: order.id, eventType: "order_fulfilled", status: "REAL", txHash: res.txHash, verifiedOnChain: true, details: { report_hash: report.content_hash } });
@@ -236,7 +238,7 @@ async function stepDeliver(order: OrderRow, ctx: BusinessContext): Promise<StepR
   return { next: "settle" };
 }
 
-async function stepSettle(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
+async function stepSettle(order: OrderRow, ctx: BusinessContext, attempt: number): Promise<StepResult> {
   const onchain = await getOrder(order.onchain_order_id);
   if (!onchain) throw new Error("Order missing on-chain");
 
@@ -257,7 +259,7 @@ async function stepSettle(order: OrderRow, ctx: BusinessContext): Promise<StepRe
     for (const c of calls) {
       await db().from("expenses").upsert({ order_id: order.id, category: "inference", amount_units: c.cost_usd_micros.toString(), status: "METERED", evidence_ref: `chat:${c.chat_id}`, reimburse_to: "owner" }, { onConflict: "order_id,evidence_ref" });
     }
-    const res = await execContractCall({ method: "settle", args: { order_id: order.onchain_order_id, claims }, idempotencyKey: `${order.id}:settle`, agentAccount: ctx.agent.near_account, maxWaitMs: 60_000 });
+    const res = await execContractCall({ method: "settle", args: { order_id: order.onchain_order_id, claims }, idempotencyKey: `${order.id}:settle:a${attempt}`, agentAccount: ctx.agent.near_account, maxWaitMs: 60_000 });
     if (res.state === "PENDING") return { repeat: true, delaySec: 10 };
     if (res.state === "FAILED") throw new Error(`settle failed: ${res.reason}`);
     await recordSettlement(order, res.txHash, preview);
@@ -334,7 +336,7 @@ async function stepRetryLegs(order: OrderRow, ctx: BusinessContext): Promise<Ste
   return { repeat: true, delaySec: 30 };
 }
 
-const STEPS: Record<Step, (o: OrderRow, c: BusinessContext) => Promise<StepResult>> = {
+const STEPS: Record<Step, (o: OrderRow, c: BusinessContext, attempt: number) => Promise<StepResult>> = {
   plan: stepPlan,
   procure: stepProcure,
   await_purchase: stepAwaitPurchase,
@@ -358,7 +360,7 @@ async function runJob(job: JobRow): Promise<void> {
   const order = await loadOrder(job.order_id);
   try {
     const ctx = await loadBusinessAnchored();
-    const result = await STEPS[job.step](order, ctx);
+    const result = await STEPS[job.step](order, ctx, job.attempts);
     if (result.repeat) {
       await db().from("jobs").update({ status: "queued", run_after: new Date(Date.now() + (result.delaySec ?? 10) * 1000).toISOString(), lease_until: null, attempts: Math.max(0, job.attempts - 1) }).eq("id", job.id);
       return;

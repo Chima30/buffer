@@ -29,6 +29,7 @@ export async function execContractCall(params: {
 
   let txHash = res.tx_hash ?? null;
   let status: string = res.status;
+  let failure: unknown = res.result ?? null;
   const deadline = Date.now() + (params.maxWaitMs ?? 45_000);
   while (!txHash && (status === "processing" || status === "approved" || status === "pending_deposit")) {
     if (Date.now() > deadline) return { state: "PENDING", requestId: res.request_id };
@@ -36,10 +37,12 @@ export async function execContractCall(params: {
     const r = await requestStatus(res.request_id);
     status = r.status;
     const result = (r.result ?? {}) as Record<string, unknown>;
+    failure = r.result ?? failure;
     txHash = (result.tx_hash as string | undefined) ?? (result.transaction_hash as string | undefined) ?? null;
   }
   if (status === "failed" || status === "rejected" || status === "refunded") {
-    return { state: "FAILED", reason: `OutLayer request ${res.request_id} ${status}`, txHash: txHash ?? undefined };
+    const detail = failure ? `: ${JSON.stringify(failure).slice(0, 300)}` : "";
+    return { state: "FAILED", reason: `OutLayer request ${res.request_id} ${status}${detail}`, txHash: txHash ?? undefined };
   }
   if (!txHash) return { state: "PENDING", requestId: res.request_id };
 
