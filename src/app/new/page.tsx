@@ -183,6 +183,12 @@ function WalletStep({ call, owner }: { call: { contractId: string; method: strin
   const [state, setState] = useState<{ tone: "ok" | "err" | "busy"; text: string } | null>(null);
   const isOwner = wallet.signedAccountId === owner;
   async function sign() {
+    setState({ tone: "busy", text: "Checking the contract" });
+    const deployed = await contractDeployed(call.contractId);
+    if (deployed !== true) {
+      setState({ tone: "err", text: deployed === false ? `${call.contractId} isn't deployed yet. Do steps 01 to 03 first, then sign this.` : `${call.contractId} doesn't exist yet. Do steps 01 to 03 first, then sign this.` });
+      return;
+    }
     setState({ tone: "busy", text: "Approve it in your wallet" });
     try {
       const outcome = await wallet.callFunctionRaw({ contractId: call.contractId, method: call.method, args: call.args, gas: "30000000000000", deposit: "0" });
@@ -202,4 +208,23 @@ function WalletStep({ call, owner }: { call: { contractId: string; method: strin
       </span>
     </div>
   );
+}
+
+/** true: contract code deployed; false: account exists without code; null: no account (or unreachable). */
+async function contractDeployed(accountId: string): Promise<boolean | null> {
+  for (const rpc of ["https://rpc.testnet.fastnear.com", "https://rpc.testnet.near.org"]) {
+    try {
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "query", params: { request_type: "view_account", finality: "final", account_id: accountId } }),
+      });
+      const j = await res.json();
+      if (j.result) return j.result.code_hash !== "11111111111111111111111111111111";
+      if (j.error) return null;
+    } catch {
+      // try the next RPC
+    }
+  }
+  return null;
 }
