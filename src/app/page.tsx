@@ -1,98 +1,115 @@
+import { ArrowRight, BookText, ShieldCheck, Terminal } from "lucide-react";
 import Link from "next/link";
-import { Money } from "@/components/money";
-import { SiteHeader } from "@/components/site-header";
+import { MoneyFlow } from "@/components/money-flow";
 import { StatusBadge } from "@/components/status-badge";
 import { LEDGER_STATUSES } from "@/lib/domain/ledger";
-import { toUnits } from "@/lib/domain/money";
-import { computeSettlement } from "@/lib/domain/revenue";
 
-// A worked example computed by the same engine the contract mirrors. Labelled as an example, not activity.
-const example = computeSettlement({
-  gross: toUnits("20"),
-  maxExpense: toUnits("13"),
-  contributorBps: 3000,
-  expenses: [
-    { id: "dataset", category: "supplier", amount: toUnits("12"), status: "PAID", evidenceRef: "tx" },
-    { id: "inference", category: "inference", amount: toUnits("0.4"), status: "METERED", evidenceRef: "chat" },
-  ],
-});
+// A real, settled order (o-91336486ee60). Every figure below is on NEAR testnet and
+// Ethereum Sepolia; `npm run verify` re-derives each one from the chains.
+const ORDER = "o-91336486ee60";
+const FLOW = [
+  {
+    label: "Costs",
+    leaves: [
+      { label: "Data vendor", units: 12_000_000n, color: "chain" as const, note: "Paid on Sepolia via Chain Signatures" },
+      { label: "AI inference", units: 3_045n, color: "ai" as const, note: "TEE-signed, GPU verified by NVIDIA" },
+    ],
+  },
+  {
+    label: "Net revenue",
+    leaves: [
+      { label: "Owner, 70%", units: 5_597_869n, color: "owner" as const },
+      { label: "Contributor, 30%", units: 2_399_086n, color: "contrib" as const },
+    ],
+  },
+];
 
-const steps = [
-  ["Order", "A customer orders a research report and writes a brief."],
-  ["Payment", "Testnet USDC goes straight to the business contract, not to the agent."],
-  ["Work", "The agent plans and has the contract pay an approved vendor, on NEAR or on Ethereum through Chain Signatures."],
-  ["Delivery", "The report ships with the TEE's signature and NVIDIA's verdict on the GPU that produced it."],
-  ["Settlement", "The contract deducts expenses, then splits net revenue 70/30."],
+const STEPS = [
+  ["Order", "A customer pays 20 USDC to the business contract, not to the agent"],
+  ["Plan", "The agent plans with private inference and decides whether data would help"],
+  ["Buy", "The contract pays an approved vendor, on NEAR or on Ethereum, within the owner's cap"],
+  ["Deliver", "The report's hash is recorded on-chain, with the TEE signature behind it"],
+  ["Settle", "Costs come off first, then the contract splits net revenue 70/30"],
+] as const;
+
+const PROOF = [
+  { href: "/ledger", icon: BookText, title: "Public ledger", body: "Every payment, purchase and payout, each with its transaction" },
+  { href: "/security", icon: ShieldCheck, title: "7 of 7 attacks blocked", body: "Prompt injection, hijacked agent, rewritten rules, all run live" },
+  { href: "https://github.com/Chima30/buffer#check-it-in-five-minutes", icon: Terminal, title: "npm run verify", body: "Re-check any order from public chains, no keys needed" },
 ] as const;
 
 export default function Home() {
   return (
-    <main className="mx-auto w-full max-w-5xl px-5 py-10 sm:py-16">
-      <SiteHeader />
-
-      <section className="mt-14 max-w-3xl">
-        <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Humans set the rules. Agents run the business.</h1>
-        <p className="mt-5 text-lg leading-relaxed text-ink-2">
-          Buffer lets an AI agent operate a business on NEAR, selling, buying, delivering and paying out revenue,
-          while code it cannot change enforces the owner&apos;s limits on every transaction.
-        </p>
-        <p className="mt-3 text-ink-3">First business: the Verified Research Desk.</p>
-        <div className="mt-6 flex flex-wrap gap-3">
-          <Link href="/store" className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-paper">Order a research brief</Link>
-          <Link href="/ledger" className="rounded-md border border-rule-strong px-4 py-2 text-sm">View the public ledger</Link>
-          <Link href="/security" className="rounded-md border border-rule-strong px-4 py-2 text-sm">See the attacks we block</Link>
-          <Link href="/new" className="rounded-md border border-rule-strong px-4 py-2 text-sm">Start your own business</Link>
-        </div>
-      </section>
-
-      <section className="mt-14 grid gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule sm:grid-cols-5">
-        {steps.map(([title, body], i) => (
-          <div key={title} className="bg-surface p-4">
-            <div className="font-mono text-xs text-ink-3">0{i + 1}</div>
-            <div className="mt-1 font-medium">{title}</div>
-            <p className="mt-1 text-sm leading-snug text-ink-2">{body}</p>
+    <main className="enter space-y-16">
+      <section className="grid items-center gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+        <div>
+          <p className="text-sm text-ink-3">Verified Research Desk, live on NEAR testnet</p>
+          <h1 className="mt-4 text-4xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[52px]">Humans set the rules. Agents run the business.</h1>
+          <p className="mt-5 max-w-[34rem] text-lg leading-[1.6] text-ink-2">
+            An AI agent sells research briefs, buys the data it needs and pays its team. A NEAR contract holds the money and enforces the owner&apos;s limits on every payment.
+          </p>
+          <div className="mt-8 flex flex-wrap gap-3">
+            <Link href="/store" className="press inline-flex h-11 items-center gap-2 rounded-lg bg-ink px-5 text-sm font-medium text-paper transition-opacity duration-150 hover:opacity-90">
+              Order a brief <ArrowRight size={16} strokeWidth={1.5} />
+            </Link>
+            <Link href="/new" className="press inline-flex h-11 items-center rounded-lg border border-rule-strong bg-surface px-5 text-sm transition-colors duration-150 hover:bg-raised">
+              Start your own business
+            </Link>
           </div>
-        ))}
-      </section>
-
-      <section className="mt-14 grid gap-8 lg:grid-cols-[1.2fr_1fr]">
-        <div className="rounded-[var(--radius-card)] border border-rule bg-surface">
-          <div className="border-b border-rule px-5 py-3">
-            <h2 className="font-medium">How revenue is split</h2>
-            <p className="text-sm text-ink-3">Worked example, computed by the settlement engine. Not live activity.</p>
-          </div>
-          <dl className="divide-y divide-rule text-sm">
-            {[
-              ["Gross paid by customer", example.gross],
-              ["Approved expenses (capped)", example.expensesCounted],
-              ["Distributable (net)", example.distributable],
-              ["Owner, 70%", example.ownerShare],
-              ["Contributor, 30%", example.contributorShare],
-              ["Paid to vendor from escrow (dataset)", example.paidToVendors],
-              ["Reimbursed to owner (inference credits)", example.reimbOwner],
-            ].map(([label, units]) => (
-              <div key={label as string} className="flex items-center justify-between px-5 py-2.5">
-                <dt className="text-ink-2">{label as string}</dt>
-                <dd><Money units={units as bigint} /></dd>
-              </div>
-            ))}
-          </dl>
         </div>
 
-        <div className="rounded-[var(--radius-card)] border border-rule bg-surface p-5">
-          <h2 className="font-medium">Every record says what it is</h2>
-          <p className="mt-1 text-sm text-ink-3">Buffer never presents a quote or a simulation as a transaction.</p>
+        <MoneyFlow
+          title="Where one order's 20 USDC went"
+          sourceLabel="Customer paid"
+          caption={<>Order <span className="font-mono">{ORDER}</span>, settled on-chain. Every line is a real transaction</>}
+          groups={FLOW}
+        />
+      </section>
+
+      <section>
+        <h2 className="text-sm text-ink-3">How an order runs</h2>
+        <ol className="mt-4 grid gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule sm:grid-cols-5">
+          {STEPS.map(([title, body], i) => (
+            <li key={title} className="bg-surface p-5">
+              <span className="font-mono text-xs text-ink-3">0{i + 1}</span>
+              <p className="mt-2 font-medium">{title}</p>
+              <p className="mt-1 text-sm leading-[1.5] text-ink-2">{body}</p>
+            </li>
+          ))}
+        </ol>
+      </section>
+
+      <section className="grid gap-6 lg:grid-cols-[1.3fr_1fr]">
+        <div>
+          <h2 className="text-sm text-ink-3">Check it yourself</h2>
           <ul className="mt-4 space-y-3">
+            {PROOF.map(({ href, icon: Icon, title, body }) => (
+              <li key={title}>
+                <Link href={href} className="group flex items-center gap-4 rounded-[var(--radius-card)] border border-rule bg-surface p-4 transition-colors duration-150 hover:bg-raised">
+                  <Icon size={18} strokeWidth={1.5} className="shrink-0 text-ink-3" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-medium">{title}</span>
+                    <span className="block text-sm text-ink-2">{body}</span>
+                  </span>
+                  <ArrowRight size={16} strokeWidth={1.5} className="shrink-0 text-ink-3 transition-transform duration-150 group-hover:translate-x-0.5" />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <h2 className="text-sm text-ink-3">Every record says what it is</h2>
+          <ul className="mt-4 space-y-3 rounded-[var(--radius-card)] border border-rule bg-surface p-5">
             {LEDGER_STATUSES.map((s) => (
-              <li key={s} className="flex items-center gap-3 text-sm">
-                <StatusBadge status={s} />
+              <li key={s} className="grid grid-cols-[96px_1fr] items-start gap-3 text-sm">
+                <span><StatusBadge status={s} /></span>
                 <span className="text-ink-2">
                   {{
-                    REAL: "Confirmed on NEAR testnet or Ethereum Sepolia, with an explorer link.",
-                    QUOTE: "A live NEAR Intents price. No funds moved.",
-                    SIMULATED: "NEAR Intents has no testnet, so an Intents settlement is shown, not performed.",
-                    PENDING: "Submitted, waiting for confirmation.",
-                    FAILED: "Did not complete. Nothing is assumed.",
+                    REAL: "Confirmed on NEAR testnet or Ethereum Sepolia, with a link",
+                    QUOTE: "A live NEAR Intents price. No funds moved",
+                    SIMULATED: "Shown, not performed: NEAR Intents has no testnet",
+                    PENDING: "Submitted, waiting for confirmation",
+                    FAILED: "Did not complete. Nothing is assumed",
                   }[s]}
                 </span>
               </li>
@@ -101,9 +118,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer className="mt-16 border-t border-rule pt-6 text-sm text-ink-3">
-        Built at NEAR HACKATHON 2026. Testnet only. No real funds.
-      </footer>
+      <footer className="border-t border-rule pt-6 text-sm text-ink-3">Built at NEAR HACKATHON 2026. Testnet only, no real funds.</footer>
     </main>
   );
 }

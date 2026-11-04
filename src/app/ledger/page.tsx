@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { Money } from "@/components/money";
-import { SiteHeader } from "@/components/site-header";
 import { StatusBadge } from "@/components/status-badge";
 import type { LedgerStatus } from "@/lib/domain/ledger";
 import { resolutionOf } from "@/lib/domain/ledger-view";
@@ -38,9 +37,9 @@ export default function LedgerPage() {
   }, []);
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-5 py-10">
-      <SiteHeader />
-      <h1 className="mt-10 text-2xl font-semibold tracking-tight">Public business ledger</h1>
+    <main className="enter">
+      <p className="text-sm text-ink-3">Ledger</p>
+      <h1 className="mt-1 text-[32px] font-medium leading-[1.15] tracking-[-0.02em]">Every payment, purchase and payout</h1>
       <p className="mt-2 max-w-2xl text-sm text-ink-2">
         Every sale, purchase and payout of the Verified Research Desk. Real entries link to the NEAR testnet transaction
         that proves them. Quotes and simulations are labelled and never carry a transaction.

@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { SiteHeader } from "@/components/site-header";
 
 interface Draft {
   contractId: string;
@@ -68,10 +67,9 @@ export default function NewBusinessPage() {
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => setForm({ ...form, [k]: e.target.value });
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-5 py-10">
-      <SiteHeader />
-      <p className="mt-10 font-mono text-xs uppercase tracking-wider text-ink-3">Start a business</p>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight">Your rules, an AI agent, a contract that enforces them</h1>
+    <main className="enter">
+      <p className="text-sm text-ink-3">Start a business</p>
+      <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">Your rules, an AI agent, a contract that enforces them</h1>
       <p className="mt-2 text-sm text-ink-2">
         Describe what you sell and how the agent may spend. You get the starting policy with its hash, the contract settings and a launch checklist. Nothing is created or signed here: you run each step yourself.
       </p>
@@ -106,7 +104,7 @@ export default function NewBusinessPage() {
       {draft && (
         <section className="mt-8 space-y-6">
           <div className="rounded-[var(--radius-card)] border border-rule bg-surface p-5 text-sm">
-            <h2 className="font-semibold">Policy v1</h2>
+            <h2 className="font-medium">Policy v1</h2>
             <ul className="mt-2 space-y-1 text-ink-2">
               <li>Agent may spend at most {usd(draft.policy.rules.limits.per_transaction_units)} USDC per purchase, {usd(draft.policy.rules.limits.daily_units)} USDC a day</li>
               <li>AI inference budget: {usd(draft.policy.rules.inference.daily_usd_micros)} USD a day</li>
@@ -123,7 +121,7 @@ export default function NewBusinessPage() {
 
           <div className="rounded-[var(--radius-card)] border border-rule bg-surface p-5">
             <div className="flex items-center justify-between gap-2">
-              <h2 className="font-semibold">Launch checklist for {draft.contractId}</h2>
+              <h2 className="font-medium">Launch checklist for {draft.contractId}</h2>
               <button onClick={download} className="rounded-md border border-rule-strong px-3 py-1 text-xs">Download plan (JSON)</button>
             </div>
             <ol className="mt-3 space-y-4 text-sm">

@@ -5,7 +5,7 @@ export function Money({ units, symbol = "USDC", className = "" }: { units: bigin
   const value = typeof units === "bigint" ? units : BigInt(units);
   return (
     <span className={`whitespace-nowrap font-mono tabular ${className}`}>
-      {formatUnits(value)} <span className="text-ink-3">{symbol}</span>
+      {formatUnits(value)} <span className="text-[max(12px,0.6em)] text-ink-3">{symbol}</span>
     </span>
   );
 }

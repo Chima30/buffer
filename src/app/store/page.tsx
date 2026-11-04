@@ -2,7 +2,6 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { SiteHeader } from "@/components/site-header";
 
 interface Product { sku: string; title: string; description: string | null; priceUnits: string; vendor: { name: string; chain: "near" | "sepolia" } }
 
@@ -41,39 +40,47 @@ export default function StorePage() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-3xl px-5 py-10">
-      <SiteHeader />
-      <section className="mt-12">
-        <p className="font-mono text-xs uppercase tracking-wider text-ink-3">Verified Research Desk</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">{selected?.title ?? "Weekly Market Brief"}</h1>
-        <p className="mt-3 text-ink-2">
-          A short, sourced research brief on the topic you choose. An AI agent plans it, may buy a dataset from an approved
-          vendor, writes it with private inference on NEAR AI Cloud, and signs off with a verifiable proof.
+    <main className="enter grid gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] lg:items-start">
+      <section>
+        <p className="text-sm text-ink-3">Store</p>
+        <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">Order a research brief</h1>
+        <p className="mt-3 max-w-[34rem] text-ink-2">
+          An AI agent plans your brief, buys a dataset from an approved vendor if it helps, and writes it with private inference on NEAR AI Cloud. You get the report and the proof behind it.
         </p>
-        <dl className="mt-6 grid grid-cols-3 gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule text-sm">
-          <div className="bg-surface p-3"><dt className="text-ink-3">Price</dt><dd className="mt-0.5 font-mono tabular">20.00 USDC</dd></div>
-          <div className="bg-surface p-3"><dt className="text-ink-3">Pay with</dt><dd className="mt-0.5">Testnet USDC</dd></div>
-          <div className="bg-surface p-3"><dt className="text-ink-3">Delivery</dt><dd className="mt-0.5">A few minutes</dd></div>
+
+        <fieldset className="mt-6 space-y-3">
+          <legend className="sr-only">Choose a product</legend>
+          {(products.length ? products : [{ sku: "weekly-market-brief", title: "Weekly Market Brief", description: "A short, sourced research brief on the topic you choose.", priceUnits: "20000000", vendor: { name: "", chain: "near" as const } }]).map((p) => {
+            const on = p.sku === sku;
+            return (
+              <label key={p.sku} className={`flex cursor-pointer gap-3 rounded-[var(--radius-card)] border bg-surface p-4 transition-colors duration-150 ${on ? "border-ink/30 shadow-[var(--highlight)]" : "border-rule hover:bg-raised"}`}>
+                <input type="radio" name="sku" value={p.sku} checked={on} onChange={() => setSku(p.sku)} className="sr-only" />
+                <span aria-hidden className={`mt-1 grid h-4 w-4 shrink-0 place-items-center rounded-full border ${on ? "border-accent" : "border-rule-strong"}`}>
+                  <span className={`h-2 w-2 rounded-full bg-accent transition-opacity duration-150 ${on ? "opacity-100" : "opacity-0"}`} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline justify-between gap-3">
+                    <span className="font-medium">{p.title}</span>
+                    <span className="font-mono text-sm tabular">{(Number(p.priceUnits) / 1e6).toFixed(2)} <span className="text-ink-3">USDC</span></span>
+                  </span>
+                  <span className="mt-1 block text-sm text-ink-2">{p.description}</span>
+                  <span className="mt-2 block text-xs text-ink-3">
+                    Dataset vendor paid {p.vendor.chain === "sepolia" ? "on Ethereum Sepolia through NEAR Chain Signatures" : "on NEAR by the business contract"}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+        </fieldset>
+
+        <dl className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule text-sm">
+          <div className="bg-surface p-4"><dt className="text-ink-3">Pay with</dt><dd className="mt-1">Testnet USDC on NEAR</dd></div>
+          <div className="bg-surface p-4"><dt className="text-ink-3">Delivery</dt><dd className="mt-1">A few minutes</dd></div>
         </dl>
       </section>
 
-      {products.length > 1 && (
-        <fieldset className="mt-6 grid gap-3 sm:grid-cols-2">
-          <legend className="sr-only">Choose a product</legend>
-          {products.map((p) => (
-            <label key={p.sku} className={`cursor-pointer rounded-[var(--radius-card)] border p-4 text-sm ${p.sku === sku ? "border-accent bg-accent-soft" : "border-rule bg-surface"}`}>
-              <input type="radio" name="sku" value={p.sku} checked={p.sku === sku} onChange={() => setSku(p.sku)} className="sr-only" />
-              <span className="font-medium">{p.title}</span>
-              <span className="mt-1 block text-xs text-ink-2">{p.description}</span>
-              <span className="mt-2 block text-xs text-ink-3">
-                Dataset vendor paid {p.vendor.chain === "sepolia" ? "on Ethereum Sepolia via NEAR Chain Signatures" : "on NEAR by the business contract"}
-              </span>
-            </label>
-          ))}
-        </fieldset>
-      )}
-
-      <form onSubmit={submit} className="mt-8 space-y-5 rounded-[var(--radius-card)] border border-rule bg-surface p-5">
+      <form onSubmit={submit} className="space-y-5 rounded-[var(--radius-card)] border border-rule bg-surface p-5 sm:p-6 lg:sticky lg:top-10">
+        <p className="font-medium">{selected?.title ?? "Weekly Market Brief"}</p>
         <label className="block">
           <span className="text-sm font-medium">What should the brief cover?</span>
           <textarea
@@ -84,7 +91,7 @@ export default function StorePage() {
             value={brief}
             onChange={(e) => setBrief(e.target.value)}
             placeholder="e.g. How AI agents can hold and spend money safely on NEAR, and what limits matter most."
-            className="mt-2 w-full rounded-md border border-rule-strong bg-paper p-3 text-sm outline-none focus:border-accent"
+            className="mt-2 w-full rounded-lg border border-rule-strong bg-paper p-3 text-sm outline-none transition-colors duration-150 focus:border-accent"
           />
         </label>
         <label className="block">
@@ -93,14 +100,14 @@ export default function StorePage() {
             value={account}
             onChange={(e) => setAccount(e.target.value)}
             placeholder="yourname.testnet"
-            className="mt-2 w-full rounded-md border border-rule-strong bg-paper p-2.5 font-mono text-sm outline-none focus:border-accent"
+            className="mt-2 h-10 w-full rounded-lg border border-rule-strong bg-paper px-3 font-mono text-sm outline-none transition-colors duration-150 focus:border-accent"
           />
         </label>
         {error && <p role="alert" className="rounded-md bg-failed-soft p-3 text-sm text-failed">{error}</p>}
-        <button disabled={busy} className="w-full rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-paper disabled:opacity-60">
-          {busy ? "Creating order…" : "Continue to payment"}
+        <button disabled={busy} className="press h-11 w-full rounded-lg bg-ink px-4 text-sm font-medium text-paper transition-opacity duration-150 hover:opacity-90 disabled:opacity-60">
+          {busy ? "Creating order" : "Continue to payment"}
         </button>
-        <p className="text-xs text-ink-3">Testnet only. Testnet USDC has no value; get some free at faucet.circle.com (NEAR Testnet).</p>
+        <p className="text-xs text-ink-3">Testnet only. Testnet USDC has no value; get some free at faucet.circle.com, NEAR Testnet.</p>
       </form>
     </main>
   );

@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { SiteHeader } from "@/components/site-header";
 
 type Outcome = "BLOCKED" | "NOT_BLOCKED" | "ERROR";
 type EvidenceKind = "signed_inference" | "policy_engine" | "custody_policy" | "contract_check" | "onchain_tx";
@@ -49,10 +48,9 @@ export default function SecurityPage() {
   const blocked = run?.results.filter((r) => r.outcome === "BLOCKED").length ?? 0;
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-5 py-10">
-      <SiteHeader />
-      <p className="mt-10 font-mono text-xs uppercase tracking-wider text-ink-3">Red team</p>
-      <h1 className="mt-1 text-2xl font-semibold tracking-tight">Can the agent be turned against its owner?</h1>
+    <main className="enter">
+      <p className="text-sm text-ink-3">Red team</p>
+      <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">Can the agent be turned against its owner?</h1>
       <p className="mt-2 max-w-2xl text-sm text-ink-2">
         We attack our own business the way a prompt injection or a hijacked server would. Every attack runs for real against the live
         testnet business. Rejected transactions are real failed transactions you can open on the explorer. No funds move.
@@ -75,7 +73,7 @@ export default function SecurityPage() {
       {run && (
         <>
           <div className="mt-10 flex flex-wrap items-baseline justify-between gap-2">
-            <h2 className="text-lg font-semibold">
+            <h2 className="text-lg font-medium">
               {blocked} of {run.results.length} attacks blocked
             </h2>
             <p className="font-mono text-xs text-ink-3">
@@ -127,7 +125,7 @@ export default function SecurityPage() {
       )}
 
       <section className="mt-10 rounded-[var(--radius-card)] border border-rule bg-surface p-5 text-sm text-ink-2">
-        <h2 className="text-base font-semibold text-ink">Try it yourself</h2>
+        <h2 className="text-base font-medium text-ink">Try it yourself</h2>
         <p className="mt-1">
           Order a report from the <a href="/store" className="text-accent">store</a> and paste a malicious instruction into the brief. The
           agent records any injection it detects in the audit log, and whatever the model says, the only payment it can make is to the

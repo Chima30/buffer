@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Money } from "@/components/money";
-import { SiteHeader } from "@/components/site-header";
+import { MoneyFlow } from "@/components/money-flow";
 import { txHashOf, useNearWallet } from "@/components/wallet";
 
 interface Overview {
@@ -119,12 +119,11 @@ export default function OwnerConsole() {
   }
 
   return (
-    <main className="mx-auto w-full max-w-5xl px-5 py-10">
-      <SiteHeader />
-      <div className="mt-10 flex flex-wrap items-end justify-between gap-3">
+    <main className="enter">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="font-mono text-xs uppercase tracking-wider text-ink-3">Owner console</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight">{data?.business?.name ?? "Business"}</h1>
+          <p className="text-sm text-ink-3">Owner console</p>
+          <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{data?.business?.name ?? "Business"}</h1>
         </div>
         {data && <StatusPill paused={data.contract.paused} agent={data.agent?.status ?? "paused"} />}
       </div>
@@ -138,18 +137,30 @@ export default function OwnerConsole() {
 
       {data && (
         <>
-          <section className="mt-6 grid grid-cols-2 gap-px overflow-hidden rounded-[var(--radius-card)] border border-rule bg-rule sm:grid-cols-4">
-            <Stat label="Revenue received" units={data.totals.revenue} />
-            <Stat label="Paid to vendors" units={data.totals.vendorSpend} />
-            <Stat label="Inference cost" units={data.totals.inferenceSpend} />
-            <Stat label="Net" units={data.totals.net} />
-            <Stat label="Paid to owner" units={data.totals.ownerPaid} />
-            <Stat label="Paid to contributor" units={data.totals.contributorPaid} />
-            <div className="col-span-2 bg-surface p-4 text-sm">
-              <div className="text-ink-3">Split</div>
-              <div className="mt-1">{100 - data.contract.contributorBps / 100}% owner · {data.contract.contributorBps / 100}% contributor, on net revenue</div>
-            </div>
-          </section>
+          <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+            {(() => {
+              const r = BigInt(data.totals.revenue), v = BigInt(data.totals.vendorSpend), ai = BigInt(data.totals.inferenceSpend), c = BigInt(data.totals.contributorPaid);
+              const owner = r - v - ai - c;
+              if (r <= 0n || owner < 0n) return null;
+              return (
+                <MoneyFlow
+                  title="Where all revenue went"
+                  sourceLabel="Customers paid"
+                  caption={<>Net revenue is split {100 - data.contract.contributorBps / 100}/{data.contract.contributorBps / 100} between owner and contributor, after costs</>}
+                  groups={[
+                    { label: "Costs", leaves: [{ label: "Data vendors", units: v, color: "chain" }, { label: "AI inference", units: ai, color: "ai" }] },
+                    { label: "Net revenue", leaves: [{ label: "Owner", units: owner, color: "owner", note: "Includes orders not settled yet" }, { label: "Contributor", units: c, color: "contrib" }] },
+                  ]}
+                />
+              );
+            })()}
+            <section className="grid grid-cols-2 gap-3 lg:grid-cols-1 lg:content-start">
+              <Stat label="Revenue received" units={data.totals.revenue} />
+              <Stat label="Paid to vendors" units={data.totals.vendorSpend} />
+              <Stat label="Paid to owner" units={data.totals.ownerPaid} />
+              <Stat label="Paid to contributor" units={data.totals.contributorPaid} />
+            </section>
+          </div>
 
           <div className="mt-6 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
             <div className="space-y-6">
@@ -292,7 +303,7 @@ export default function OwnerConsole() {
                 {data.policy?.values && (
                   <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-xs">
                     {Object.entries(VALUE_LABELS).map(([k, [label, unit]]) => (
-                      <div key={k} className="contents"><dt className="text-ink-3">{label}</dt><dd className="text-right font-mono">{data.policy?.values?.[k]} {unit}</dd></div>
+                      <div key={k} className="contents"><dt className="text-ink-3">{label}</dt><dd className="text-right font-mono tabular">{Number(data.policy?.values?.[k] ?? 0).toFixed(2)} {unit}</dd></div>
                     ))}
                     <dt className="text-ink-3">Payments to unapproved wallets</dt><dd className="text-right font-mono">always blocked</dd>
                   </dl>
@@ -327,7 +338,7 @@ export default function OwnerConsole() {
                   <a href={data.treasury.explorerUrl} target="_blank" rel="noreferrer" className="mt-2 block break-all font-mono text-xs text-accent">{data.treasury.address} ↗</a>
                   <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
                     <dt className="text-ink-3">USDC</dt><dd className="text-right"><Money units={data.treasury.usdc} /></dd>
-                    <dt className="text-ink-3">ETH (gas)</dt><dd className="text-right font-mono">{(Number(BigInt(data.treasury.eth) / 10n ** 12n) / 1e6).toFixed(4)}</dd>
+                    <dt className="text-ink-3">Gas</dt><dd className="text-right font-mono tabular">{(Number(BigInt(data.treasury.eth) / 10n ** 12n) / 1e6).toFixed(4)} <span className="text-ink-3">ETH</span></dd>
                   </dl>
                 </Card>
               )}
@@ -458,9 +469,9 @@ function StatusPill({ paused, agent }: { paused: boolean; agent: string }) {
 
 function Stat({ label, units }: { label: string; units: string }) {
   return (
-    <div className="bg-surface p-4">
-      <div className="text-xs text-ink-3">{label}</div>
-      <div className="mt-1 text-lg"><Money units={units} /></div>
+    <div className="rounded-[var(--radius-card)] border border-rule bg-surface p-5">
+      <div className="text-sm text-ink-3">{label}</div>
+      <div className="mt-2 text-[28px] leading-none"><Money units={units} /></div>
     </div>
   );
 }

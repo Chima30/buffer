@@ -1,65 +1,130 @@
 @import "tailwindcss";
 
 /*
- * Buffer design tokens. Ledger-first: near-monochrome ink on paper, one accent,
- * and fixed status colours that always appear with a text label and icon.
+ * Buffer design tokens.
+ * Direction: exact, accountable, calm. A clearing house at night: money routes,
+ * ledgers and stamped receipts. Graphite surfaces stay neutral; colour lives in
+ * the money-flow chart (each hue is a recipient) and in the status stamps.
+ *
+ * Themes: [data-theme] on <html>, set before paint from the saved choice or the
+ * system setting (see layout.tsx). Tailwind classes read the variables below.
  */
-@theme {
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
+
+@theme inline {
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 
-  --color-paper: #f7f6f3;
-  --color-surface: #ffffff;
-  --color-ink: #16171a;
-  --color-ink-2: #45474d;
-  --color-ink-3: #7a7d85;
-  --color-rule: #e3e1dc;
-  --color-rule-strong: #cfccc5;
+  --color-paper: var(--paper);
+  --color-sidebar: var(--sidebar);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-ink: var(--ink);
+  --color-ink-2: var(--ink-2);
+  --color-ink-3: var(--ink-3);
+  --color-rule: var(--rule);
+  --color-rule-strong: var(--rule-strong);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
 
-  --color-accent: #1f4fd6;
-  --color-accent-soft: #e8eefc;
+  --color-real: var(--real);
+  --color-real-soft: var(--real-soft);
+  --color-quote: var(--quote);
+  --color-quote-soft: var(--quote-soft);
+  --color-simulated: var(--simulated);
+  --color-simulated-soft: var(--simulated-soft);
+  --color-pending: var(--pending);
+  --color-pending-soft: var(--pending-soft);
+  --color-failed: var(--failed);
+  --color-failed-soft: var(--failed-soft);
 
-  --color-real: #137a43;
-  --color-real-soft: #e4f4ea;
-  --color-quote: #1f5fbf;
-  --color-quote-soft: #e6eefb;
-  --color-simulated: #5d6068;
-  --color-simulated-soft: #eeeeec;
-  --color-pending: #9a5b00;
-  --color-pending-soft: #fbf0dc;
-  --color-failed: #b42318;
-  --color-failed-soft: #fbe7e5;
+  /* Money-flow chart: one hue per recipient. */
+  --color-flow-in: var(--flow-in);
+  --color-flow-vendor: var(--flow-vendor);
+  --color-flow-chain: var(--flow-chain);
+  --color-flow-ai: var(--flow-ai);
+  --color-flow-owner: var(--flow-owner);
+  --color-flow-contrib: var(--flow-contrib);
 
-  --radius-card: 10px;
+  --radius-card: 14px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-paper: #101113;
-    --color-surface: #17181b;
-    --color-ink: #ececea;
-    --color-ink-2: #b8b9bc;
-    --color-ink-3: #8a8c92;
-    --color-rule: #2a2c30;
-    --color-rule-strong: #3a3c41;
-    --color-accent: #7c9cff;
-    --color-accent-soft: #1c2440;
-    --color-real: #5fd08f;
-    --color-real-soft: #12291d;
-    --color-quote: #7fb0ff;
-    --color-quote-soft: #142139;
-    --color-simulated: #a3a5ab;
-    --color-simulated-soft: #222428;
-    --color-pending: #f0b65a;
-    --color-pending-soft: #2e2412;
-    --color-failed: #ff8a80;
-    --color-failed-soft: #341816;
-  }
+:root {
+  color-scheme: light;
+  --paper: #f6f6f5;
+  --sidebar: #efefee;
+  --surface: #ffffff;
+  --raised: #f1f1f2;
+  --ink: #171717;
+  --ink-2: #525252;
+  --ink-3: #6f6f73;
+  --rule: rgb(23 23 23 / 0.08);
+  --rule-strong: rgb(23 23 23 / 0.14);
+  --accent: #1d4ed8;
+  --accent-soft: rgb(29 78 216 / 0.08);
+
+  --real: #15803d;
+  --real-soft: #e7f5ec;
+  --quote: #1d4ed8;
+  --quote-soft: #e8eefc;
+  --simulated: #5d6068;
+  --simulated-soft: #efefef;
+  --pending: #a15c00;
+  --pending-soft: #fbf1df;
+  --failed: #c2261d;
+  --failed-soft: #fbe9e7;
+
+  --flow-in: #a3a3a3;
+  --flow-vendor: #2563eb;
+  --flow-chain: #0e9f95;
+  --flow-ai: #c27a12;
+  --flow-owner: #16a34a;
+  --flow-contrib: #7c6fb0;
+
+  --shadow-float: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.06);
+  --highlight: inset 0 1px 0 rgb(255 255 255 / 0.6);
 }
 
+[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #141415;
+  --sidebar: #0f0f10;
+  --surface: #19191b;
+  --raised: #232325;
+  --ink: #ededed;
+  --ink-2: #a1a1a6;
+  --ink-3: #85858b;
+  --rule: rgb(237 237 237 / 0.08);
+  --rule-strong: rgb(237 237 237 / 0.14);
+  --accent: #8aa8ff;
+  --accent-soft: rgb(138 168 255 / 0.1);
+
+  --real: #4cc38a;
+  --real-soft: #13291e;
+  --quote: #8ab4ff;
+  --quote-soft: #15213a;
+  --simulated: #a3a5ab;
+  --simulated-soft: #222326;
+  --pending: #e9b35a;
+  --pending-soft: #2c2312;
+  --failed: #f2726b;
+  --failed-soft: #321816;
+
+  --flow-in: #5b5b60;
+  --flow-vendor: #4f86f7;
+  --flow-chain: #2bb8ad;
+  --flow-ai: #e0a03c;
+  --flow-owner: #4cc38a;
+  --flow-contrib: #a497d6;
+
+  --shadow-float: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 12px 32px rgb(0 0 0 / 0.4);
+  --highlight: inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+html,
 body {
-  background: var(--color-paper);
-  color: var(--color-ink);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--font-sans);
 }
 
@@ -72,12 +137,60 @@ body {
   background-image: repeating-linear-gradient(
     135deg,
     transparent 0 5px,
-    color-mix(in srgb, var(--color-simulated) 18%, transparent) 5px 6px
+    color-mix(in srgb, var(--simulated) 18%, transparent) 5px 6px
   );
 }
 
+/* ---------- motion: one curve, short durations ---------- */
+:root {
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Theme switches tween colour only. */
+html.theme-tween * {
+  transition: background-color 220ms var(--ease), border-color 220ms var(--ease), color 220ms var(--ease) !important;
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+/* One entrance per page: the main column's blocks fade and rise in turn. */
+.enter > * {
+  animation: rise 420ms var(--ease) both;
+}
+.enter > *:nth-child(2) { animation-delay: 50ms; }
+.enter > *:nth-child(3) { animation-delay: 100ms; }
+.enter > *:nth-child(4) { animation-delay: 150ms; }
+.enter > *:nth-child(5) { animation-delay: 200ms; }
+.enter > *:nth-child(n + 6) { animation-delay: 250ms; }
+
+/* Money-flow ribbons reveal left to right, once. */
+@keyframes reveal {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.flow-reveal {
+  transform-origin: left center;
+  transform-box: fill-box;
+  animation: reveal 900ms var(--ease) 150ms both;
+}
+@keyframes fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.flow-label {
+  animation: fade 400ms var(--ease) 700ms both;
+}
+
+.press:active {
+  transform: scale(0.98);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  * {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
     transition: none !important;
   }

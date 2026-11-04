@@ -3,7 +3,6 @@
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
-import { SiteHeader } from "@/components/site-header";
 import { StatusBadge } from "@/components/status-badge";
 import { ReportMarkdown } from "@/components/report-markdown";
 import { txHashOf, useNearWallet } from "@/components/wallet";
@@ -99,16 +98,15 @@ export function OrderView() {
   }, [load]);
 
   return (
-    <main className="mx-auto w-full max-w-4xl px-5 py-10">
-      <SiteHeader />
-      {loadError && !order && <p role="alert" className="mt-10 rounded-md bg-failed-soft p-4 text-failed">{loadError}</p>}
-      {!order && !loadError && <p className="mt-10 text-ink-3">Loading order…</p>}
+    <main className="enter">
+      {loadError && !order && <p role="alert" className="rounded-md bg-failed-soft p-4 text-failed">{loadError}</p>}
+      {!order && !loadError && <p className="text-ink-3">Loading order</p>}
       {order && (
         <>
-          <section className="mt-10 flex flex-wrap items-end justify-between gap-3">
+          <section className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="font-mono text-xs text-ink-3">Order {order.onchainOrderId}</p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-tight">{order.plan?.title ?? order.productTitle ?? "Weekly Market Brief"}</h1>
+              <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{order.plan?.title ?? order.productTitle ?? "Weekly Market Brief"}</h1>
             </div>
             <Money units={order.priceUnits} className="text-lg" />
           </section>
@@ -131,7 +129,7 @@ export function OrderView() {
               {order.plan && (
                 <Card title="Agent's plan">
                   <ul className="list-disc space-y-1 pl-5 text-sm text-ink-2">{order.plan.angles.map((a) => <li key={a}>{a}</li>)}</ul>
-                  <p className="mt-3 text-xs text-ink-3">Dataset: {order.plan.use_dataset ? `yes. ${order.plan.dataset_reason}` : "not needed"}</p>
+                  <p className="mt-3 text-xs text-ink-3">{order.plan.use_dataset ? `Buys the dataset${order.plan.dataset_reason ? `: ${order.plan.dataset_reason.replace(/\.$/, "")}` : ""}` : "No dataset needed"}</p>
                 </Card>
               )}
             </div>

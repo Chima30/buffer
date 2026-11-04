@@ -12,9 +12,9 @@ export function ReportMarkdown({ content }: { content: string }) {
     <div className="text-sm leading-relaxed">
       <ReactMarkdown
         components={{
-          h1: (p) => <h1 className="mb-3 mt-1 text-xl font-semibold tracking-tight" {...p} />,
-          h2: (p) => <h2 className="mb-2 mt-6 text-base font-semibold" {...p} />,
-          h3: (p) => <h3 className="mb-1 mt-4 font-semibold" {...p} />,
+          h1: (p) => <h1 className="mb-3 mt-1 text-xl font-medium tracking-tight" {...p} />,
+          h2: (p) => <h2 className="mb-2 mt-6 text-base font-medium" {...p} />,
+          h3: (p) => <h3 className="mb-1 mt-4 font-medium" {...p} />,
           p: (p) => <p className="my-3 text-ink-2" {...p} />,
           ul: (p) => <ul className="my-3 list-disc space-y-1 pl-5 text-ink-2" {...p} />,
           ol: (p) => <ol className="my-3 list-decimal space-y-1 pl-5 text-ink-2" {...p} />,
@@ -23,7 +23,7 @@ export function ReportMarkdown({ content }: { content: string }) {
               {children}
             </a>
           ),
-          strong: (p) => <strong className="font-semibold text-ink" {...p} />,
+          strong: (p) => <strong className="font-medium text-ink" {...p} />,
           code: (p) => <code className="rounded bg-paper px-1 py-0.5 font-mono text-xs" {...p} />,
           blockquote: (p) => <blockquote className="my-3 border-l-2 border-rule-strong pl-3 text-ink-3" {...p} />,
           hr: () => <hr className="my-6 border-rule" />,
