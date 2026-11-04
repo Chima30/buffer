@@ -8,6 +8,7 @@ import { z } from "zod";
 import { loadBusiness, scopeFor } from "@/lib/server/business";
 import { db, must } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
+import { rateLimit } from "@/lib/server/rate-limit";
 import { fail, hashToken, json, newToken } from "@/lib/server/http";
 
 const body = z.object({
@@ -23,6 +24,11 @@ const body = z.object({
 });
 
 export async function POST(req: Request) {
+  const limited = await rateLimit(req, "orders", 20, 3600);
+  if (limited) return limited;
+  // Unpaid orders cost nothing but rows; cap them so the table cannot be flooded.
+  const open = await db().from("orders").select("id", { count: "exact", head: true }).eq("state", "AWAITING_PAYMENT").gte("created_at", new Date(Date.now() - 24 * 3600_000).toISOString());
+  if ((open.count ?? 0) >= 500) return fail(503, "Too many unpaid orders right now; please try again later");
   const parsed = body.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return fail(400, parsed.error.issues[0]?.message ?? "Invalid request");
 

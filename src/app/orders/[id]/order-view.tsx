@@ -54,6 +54,9 @@ const EVENT_LABELS: Record<string, string> = {
   payout_owner: "Owner share (70%)",
   payout_contributor: "Contributor share (30%)",
   payout_reimb_owner: "Expenses reimbursed to owner",
+  refund_topped_up: "Owner topped up the refund",
+  refund_started: "Refund started",
+  refund_paid: "Customer refunded",
 };
 
 // Browser-only values, read without effects. The order token lives in the URL fragment.
@@ -116,7 +119,8 @@ export function OrderView() {
           {order.state === "AWAITING_APPROVAL" && (
             <Notice tone="pending">The agent wants to buy a dataset for {order.purchase ? <Money units={order.purchase.amount_units} /> : "this order"}. Purchases above 10 USDC wait for the owner to approve that exact purchase on-chain.</Notice>
           )}
-          {order.state === "REFUND_PENDING" && <Notice tone="failed">The agent could not finish this order. The owner has been asked to refund it in full.</Notice>}
+          {order.state === "REFUND_PENDING" && <Notice tone="failed">This order is being refunded in full. The agent has stopped working on it.</Notice>}
+          {order.state === "REFUNDED" && <Notice tone="simulated">This order was refunded. The refund transaction is in the ledger below.</Notice>}
           {!order.authorised && <Notice tone="simulated">You are viewing public status only. The brief and report are visible with the private link from checkout.</Notice>}
 
           <div className="mt-8 grid gap-6 lg:grid-cols-[1.3fr_1fr]">

@@ -1,71 +1,132 @@
 # Buffer
 
-Humans set the rules. Agents run the business.
+Humans set the rules. AI agents run the business.
 
-Buffer is infrastructure for businesses operated by AI agents on NEAR. An owner sets prices, spending limits, approved vendors, approval thresholds and the revenue split. An agent then runs the business: it takes orders, buys what it needs, delivers the work and settles revenue. Deterministic code the agent cannot change checks every money movement, and every event is recorded with on-chain evidence.
+Buffer runs a small business with an AI agent on NEAR. The owner sets the price, the spending limits, the approved vendors, the approval threshold and the revenue split. The agent takes orders, buys the data it needs, writes the work with private inference, delivers it and settles revenue. A NEAR contract holds the money and enforces the owner's rules on every payment. The agent cannot change them.
 
-The first business is the **Verified Research Desk**: it sells short research reports, buys a dataset from an approved vendor, runs private inference on NEAR AI Cloud, and settles revenue 70/30 between owner and contributor.
+The first business is the **Verified Research Desk**. It sells short research briefs for 20 testnet USDC.
 
-Built at NEAR HACKATHON 2026. Tracks: Autonomous Business (`business`), Agent Economy (`agents`). AI Security (`security`) once the attack demo ships. Testnet only.
+- Live (testnet): https://buffer-zeta.vercel.app
+- NEAR HACKATHON 2026. Tracks: Autonomous Business (`business`), Agent Economy (`agents`), AI Security (`security`)
+- Testnet only. No real funds.
 
-## Status
+## Check it in five minutes
 
-Work in progress (milestone M1/M2). What exists and is tested today:
+1. **Ledger.** Open [/ledger](https://buffer-zeta.vercel.app/ledger). Each payment, purchase and payout has a status. `REAL` rows link to the transaction on NEAR or Ethereum Sepolia.
+2. **Verify an order yourself.** This uses public chains only, with no keys and no `.env`:
+   ```
+   npm install
+   npm run verify -- https://buffer-zeta.vercel.app/orders/<order-id>
+   ```
+   It re-reads the payment, every purchase (including the Sepolia transfer and its MPC signature), the report hash, the 70/30 settlement math, the TEE signatures and NVIDIA's GPU verdict. Then it prints PASS or FAIL for each.
+3. **Attacks.** Open [/security](https://buffer-zeta.vercel.app/security). We ran seven attacks on our own live business: prompt injection from a customer, injection hidden in a vendor's data, paying an attacker on NEAR and on Ethereum, moving USDC directly, rewriting the rules, and overspending. The page shows which layer stopped each one. The rejected calls are real failed transactions; follow the agent's explorer link to see them.
+4. **Owner console.** Open [/app](https://buffer-zeta.vercel.app/app). It shows totals, approvals, emergency controls (pause the contract, freeze the agent's wallet), the policy and its on-chain hash, the Ethereum treasury and refunds. Every owner action is a transaction the owner signs.
+5. **Start a business.** Open [/new](https://buffer-zeta.vercel.app/new). Describe a business and its rules in plain English, and get its policy, hash and launch checklist. Nothing is created for you.
 
-| Component | Where | Tests |
-| --- | --- | --- |
-| Business contract: escrow, exact-price payments, on-chain vendor allowlist and purchase approvals, settlement, per-leg retry, refunds with owner top-up, policy anchor, pause | `contract/` | 35 unit tests (`cargo test --lib`), sandbox test |
-| Revenue engine (off-chain mirror of the contract formula) | `src/lib/domain/revenue.ts` | 10 tests incl. 5,000 generated cases |
-| Policy engine (deterministic) + policy hash anchoring | `src/lib/domain/policy/` | 16 tests |
-| Approval binding to exact action + revalidation | `src/lib/domain/approval.ts` | 8 tests |
-| Order state machine, ledger status rules | `src/lib/domain/` | covered above |
-| NEAR AI Cloud client with chat-signature verification | `src/lib/server/nearai.ts` | 6 tests |
-| OutLayer agent-custody wrapper, 1Click dry quotes, NEAR RPC verification | `src/lib/server/` | live checks via `npm run m0` |
-| Supabase schema with RLS lockdown, append-only ledger, job leasing | `supabase/migrations/` | 8 tests on in-memory Postgres |
+## What one order does
 
-| Agent runtime: plan → (buy dataset via the contract) → draft → deliver → settle, as idempotent jobs | `src/lib/server/agent/` | typecheck, build; live on testnet |
-| Order API with on-chain payment verification, approvals confirmation, NEAR Intents quote + labelled simulation | `src/app/api/` | build |
-| Storefront, live order page with proof of private inference, public ledger | `src/app/store`, `src/app/orders/[id]`, `src/app/ledger` | build |
+1. **Pay.** The customer pays 20 USDC to the contract (`ft_transfer_call`). The contract accepts only the exact price for a new order id.
+2. **Plan.** The agent plans with private inference on NEAR AI Cloud. The response is signed inside a TEE. We check the signature, and NVIDIA's attestation service verifies the GPUs for a fresh nonce.
+3. **Buy.** If the dataset helps, the agent asks the contract to pay the vendor. The policy engine checks the action first.
+   - The contract pays only an approved vendor, within the order's 13 USDC expense cap.
+   - Above 10 USDC, the contract waits for the owner to approve that exact purchase.
+   - The vendor is paid either from the order's escrow on NEAR, or from the contract's Ethereum treasury through Chain Signatures (see below).
+4. **Write and deliver.** The report is written with private inference, and its sha256 is recorded on-chain.
+5. **Settle.** The contract pays out net revenue: 70% to the owner, 30% to the contributor. It also reimburses the owner for expenses they prepaid.
 
-Not built yet: the owner console (approvals and kill switch in the browser), natural-language policy builder, wallet-connect payment, demo mode.
-
-## How the money works
-
-Per order, in USDC smallest units (6 decimals):
+### The money, per order (USDC units, 6 decimals)
 
 ```
-V  = vendor purchases the contract paid from this order's escrow
-I  = inference cost (metered, reimbursed to the owner who prepaid the credits)
-E  = min(V + I, product.max_expense, gross)
-D  = gross - E                                   distributable (net)
-C  = floor(D * 3000 / 10000)                     contributor, 30%
-O  = D - C                                       owner, 70% (gets rounding dust)
-V + (E - V) + C + O == gross, checked in the contract and the database.
+V  = vendor purchases paid from this order's escrow (NEAR)
+X  = vendor purchases paid from the Ethereum treasury (owner-funded)
+I  = inference cost (prepaid by the owner)
+E  = min(V + X + I, product.max_expense, gross)
+D  = gross - E                         net
+C  = floor(D * 3000 / 10000)           contributor, 30%
+O  = D - C                             owner, 70% (keeps rounding dust)
+reimbursed to owner = E - V
+V + (E - V) + C + O == gross           checked by the contract and by our off-chain mirror
 ```
 
-Demo: a 20 USDC report, a 12 USDC dataset, 0.40 inference → net 7.60, owner 5.32, contributor 2.28.
+Example from a live cross-chain order: gross 20, Ethereum dataset 12, inference 0.003045. Net is 7.996955, so the owner gets 5.597869, the contributor 2.399086 and the owner is reimbursed 12.003045, which adds up to exactly 20.
 
-The agent never holds funds. Vendors are paid by the contract, only if the owner approved the vendor on-chain, within the order's expense cap; purchases above 10 USDC wait for the owner's on-chain approval of that exact vendor and amount. Refunds make the customer whole: the owner tops up any vendor spend, then the contract refunds the full gross.
+## Why the agent cannot misuse the money
+
+| Layer | What it enforces |
+| --- | --- |
+| Prompts | Customer briefs and vendor data are wrapped as untrusted data, and the model is told to ignore instructions inside them. It flags injection attempts. |
+| No money path from text | Model output never chooses a payee or an amount. Those come from the owner's configuration. |
+| Policy engine | Deterministic checks before every action: allowlist, limits, budgets, minimum price, approvals. Prohibitions cannot be approved away. |
+| Policy anchor | The policy's sha256 is stored in the contract. The agent refuses to act if its copy differs, and pauses while a change is half-signed. |
+| Agent custody (OutLayer) | The agent's key lives in a TEE. Its signing policy allows calls to one contract only. The owner can freeze it on-chain. |
+| Business contract | It holds the money. It pays approved vendors only, caps each order's expenses, waits for owner approval above the threshold, and keeps configuration owner-only. |
+| Chain Signatures | The contract builds the Ethereum transaction itself and asks the MPC network to sign only that. The agent never passes bytes to sign. |
+
+Rules in plain English: in the owner console, the owner describes a rule change ("purchases above $5 need my approval"). Private inference translates it into at most seven numeric fields. Code applies them, checks the result and computes the hash. Nothing changes until the owner signs the hash on-chain. The translator has no field for wallets, vendors, agent permissions or prohibitions, so it cannot change those.
+
+## Chain Signatures (Ethereum Sepolia)
+
+The contract owns an Ethereum address derived by NEAR's MPC network (`v1.signer-prod.testnet`, path `buffer-treasury`). No one holds its private key. A cross-chain purchase works like this:
+
+1. The agent calls `request_evm_purchase(order, vendor, amount, fees)`, with fees under the owner's cap.
+2. The contract builds an EIP-1559 USDC `transfer` to the approved vendor (checked byte-for-byte against viem in the tests) and asks the MPC network to sign its keccak256.
+3. The server checks that the signed bytes are exactly what the contract built and that the signature recovers to the treasury. Then it broadcasts and waits for the receipt.
+4. The vendor releases data only after the USDC `Transfer` from the treasury is confirmed on Sepolia.
+
+The owner funds the treasury and is reimbursed at settlement.
+
+- Treasury: [`0x87239682e3a986431C656DB9B0bd3cB8B36Dc569`](https://sepolia.etherscan.io/address/0x87239682e3a986431C656DB9B0bd3cB8B36Dc569)
 
 ## Honesty rules
 
-Every record has one status: `REAL` (confirmed on NEAR testnet, with a transaction hash), `QUOTE` (a live NEAR Intents price; no funds moved), `SIMULATED` (NEAR Intents has no testnet, so cross-chain settlement is shown but not performed), `PENDING` or `FAILED`. The database rejects a `QUOTE` or `SIMULATED` row with a transaction hash, and a `REAL` row without one.
+Every ledger row has exactly one status:
+- `REAL`: confirmed on-chain, with a transaction link.
+- `QUOTE`: a live NEAR Intents price; no funds moved.
+- `SIMULATED`: shown but not performed, because NEAR Intents has no testnet.
+- `PENDING` or `FAILED`.
 
-## Try it
+The database rejects a `QUOTE` or `SIMULATED` row that has a transaction hash, and a `REAL` row that doesn't.
 
-1. `npm install`
-2. `npm test` → see 51 TypeScript tests pass (domain logic, signature verification, database schema).
-3. `cd contract && cargo test --lib` → see 35 contract tests pass.
-4. Copy `.env.example` to `.env.local`, fill in testnet values, then `npm run m0` → see PASS/FAIL/SKIP for each live integration (read-only, plus one small inference call).
-5. `npm run dev` → open http://localhost:3000.
+Demo vendors deliver small static reference packs, labelled as such. Their payments are real testnet transfers.
 
-## NEAR integrations
+## Accounts (testnet)
 
-- **NEAR Protocol (testnet):** the `buffer-desk` contract holds payments in escrow and settles revenue. Payments use Circle's testnet USDC (`3e2210e1184b45b64c8a434c0a7e7b23cc04ea7eb7a6c3c32520d03d4afcb8af`).
-- **OutLayer Agent Custody:** the agent's wallet keys live in OutLayer's TEE. Its owner-set policy allows contract calls only, only to the Buffer contract, with no NEAR attached. The app holds only a server-side API key; the owner can freeze the wallet on-chain.
-- **NEAR AI Cloud:** inference through the gateway (`cloud-api.near.ai`) with per-response signature verification against the attestation report.
-- **NEAR Intents (1Click):** dry-run quotes only (`dry: true`). There is no Intents testnet.
-- **Chain Signatures:** stretch goal (contract-gated vendor payment on Base Sepolia).
+| Role | Account |
+| --- | --- |
+| Business contract | [`buffer-john-desk.testnet`](https://testnet.nearblocks.io/address/buffer-john-desk.testnet) |
+| Owner | `buffer-john-owner.testnet` |
+| Contributor | `buffer-john-contrib.testnet` |
+| Agent (OutLayer custody) | [`26f36567c9a7bd63f340c0c48621ee1257ee28c68211736226caf4efefb8dd84`](https://testnet.nearblocks.io/address/26f36567c9a7bd63f340c0c48621ee1257ee28c68211736226caf4efefb8dd84) |
+| Ethereum treasury (Chain Signatures) | `0x87239682e3a986431C656DB9B0bd3cB8B36Dc569` |
+| USDC | Circle testnet USDC: `3e2210e1…b8af` on NEAR, `0x1c7D…7238` on Sepolia |
+
+Read the contract's state directly:
+```
+near contract call-function as-read-only buffer-john-desk.testnet get_config json-args {} network-config testnet now
+near contract call-function as-read-only buffer-john-desk.testnet get_order json-args '{"order_id":"o-91336486ee60"}' network-config testnet now
+```
+
+## Stack and code
+
+- **Contract.** `contract/` is Rust with near-sdk 5. It has 48 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
+- **App.** Next.js 16 on Vercel with Supabase. Row-level security denies all public access, the ledger is append-only, and job leases use `FOR UPDATE SKIP LOCKED`. Supabase Cron calls `/api/runtime/tick` every minute.
+- **Deterministic core.** `src/lib/domain/` holds the policy engine, the revenue mirror of the contract formula, the order state machine and the policy builder's checks. Tests: `npm test`.
+- **Integrations.** `src/lib/server/` contains:
+  - NEAR AI Cloud, with signature checks (`nearai.ts`);
+  - NVIDIA NRAS (`nras.ts`);
+  - OutLayer custody (`outlayer.ts`);
+  - Chain Signatures and Sepolia (`evm.ts`);
+  - NEAR RPC verification (`near-rpc.ts`);
+  - 1Click dry quotes (`oneclick.ts`).
+- **Agent runtime.** `src/lib/server/agent/runtime.ts` runs idempotent steps: plan → buy → (approval) → draft → deliver → settle.
+- **Independent verifier.** `src/lib/verify/order.ts` (`npm run verify`).
+
+## Limits we know about
+
+- Testnet only. A mainnet NEAR Intents settlement has not been run; Intents appears only as `QUOTE` and `SIMULATED`.
+- We verify the NEAR AI response signature and NVIDIA's GPU attestation. We do not verify the Intel TDX quote, which needs Intel's DCAP collateral.
+- One business and one agent run today. `/new` produces the plan for another business but does not deploy it.
+- Owner actions are signed with near-cli or a NEAR wallet. The console shows the exact command for each.
 
 ## License
 

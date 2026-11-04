@@ -10,6 +10,7 @@ export function SiteHeader() {
         <Link href="/ledger" className="hover:text-ink">Ledger</Link>
         <Link href="/security" className="hover:text-ink">Security</Link>
         <Link href="/app" className="hover:text-ink">Owner</Link>
+        <Link href="/new" className="hover:text-ink">Start</Link>
         <span className="hidden rounded-full border border-rule-strong px-2.5 py-0.5 font-mono text-xs sm:inline">NEAR testnet</span>
         <WalletButton />
       </nav>

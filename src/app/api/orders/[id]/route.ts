@@ -19,13 +19,13 @@ export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
   ]);
 
   let report: unknown = null;
-  let proofs: unknown[] = [];
   if (authorised) {
     const r = await db().from("reports").select("content,content_hash,created_at").eq("order_id", id).maybeSingle();
     report = r.data;
-    const calls = await db().from("inference_calls").select("purpose,model,chat_id,signature_kind,signing_address,verification_level,gpu_attestation,gpu_attestation_detail,request_hash,response_hash,tokens_in,tokens_out,cost_usd_micros").eq("order_id", id).order("created_at");
-    proofs = calls.data ?? [];
   }
+  // Proofs are public: they hold hashes and signatures, never the brief or the report.
+  const calls = await db().from("inference_calls").select("purpose,model,chat_id,signature_kind,signing_address,signature,signature_text,verification_level,gpu_attestation,gpu_attestation_detail,request_hash,response_hash,tokens_in,tokens_out,cost_usd_micros").eq("order_id", id).order("created_at");
+  const proofs = calls.data ?? [];
 
   return json({
     id: order.id,

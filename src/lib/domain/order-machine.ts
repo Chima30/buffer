@@ -25,7 +25,8 @@ const TRANSITIONS: Record<OrderState, readonly OrderState[]> = {
   PROCURING: ["AWAITING_APPROVAL", "DRAFTING", "REFUND_PENDING"],
   AWAITING_APPROVAL: ["PROCURING", "DRAFTING", "REFUND_PENDING"],
   DRAFTING: ["DELIVERED", "REFUND_PENDING"],
-  DELIVERED: ["SETTLING"],
+  // The owner may still refund a delivered (fulfilled, unsettled) order.
+  DELIVERED: ["SETTLING", "REFUND_PENDING"],
   SETTLING: ["SETTLED", "SETTLING"],
   SETTLED: [],
   REFUND_PENDING: ["REFUNDED"],

@@ -12,6 +12,7 @@
     "m0": "tsx scripts/m0-check.ts",
     "nras": "tsx scripts/nras-check.ts",
     "treasury": "tsx scripts/evm-treasury.ts",
+    "verify": "tsx scripts/verify.ts",
     "seed:crosschain": "tsx scripts/seed-crosschain.ts",
     "outlayer:register": "tsx scripts/outlayer-register.ts",
     "outlayer:policy": "tsx scripts/outlayer-policy.ts",

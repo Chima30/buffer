@@ -115,6 +115,7 @@ export async function runInference(params: {
         signature_kind: sig?.signatureKind ?? null,
         signing_address: sig?.signingAddress ?? null,
         signature: sig?.signature ?? null,
+        signature_text: sig?.text ?? null,
         verification_level: verification,
         gpu_attestation: gpu?.verdict ?? null,
         gpu_attestation_detail: gpu ? { detail: gpu.detail, arch: gpu.arch ?? null, gpus: gpu.gpus ?? null, issued_at: gpu.issuedAt ?? null, nras_platform_token: gpu.platformToken ?? null } : null,

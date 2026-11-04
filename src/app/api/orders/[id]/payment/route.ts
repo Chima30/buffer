@@ -10,6 +10,7 @@ import { runDueJobs, enqueue } from "@/lib/server/agent/runtime";
 import { bufferEventsFromTx, getOrder } from "@/lib/server/contract";
 import { db, must } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
+import { rateLimit } from "@/lib/server/rate-limit";
 import { fail, json, tokenMatches } from "@/lib/server/http";
 import { writeLedger } from "@/lib/server/ledger";
 
@@ -22,6 +23,8 @@ const body = z.object({
 });
 
 export async function POST(req: Request, ctx: RouteContext<"/api/orders/[id]/payment">) {
+  const limited = await rateLimit(req, "payment", 60, 3600);
+  if (limited) return limited;
   const { id } = await ctx.params;
   const parsed = body.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return fail(400, parsed.error.issues[0]?.message ?? "Invalid request");

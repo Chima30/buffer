@@ -7,6 +7,7 @@
  */
 import { z } from "zod";
 import { draftPolicy } from "@/lib/server/policy-builder";
+import { rateLimit } from "@/lib/server/rate-limit";
 import { fail, json } from "@/lib/server/http";
 
 export const maxDuration = 60;
@@ -14,6 +15,8 @@ export const maxDuration = 60;
 const body = z.object({ text: z.string().trim().min(5, "Describe at least one rule").max(1000, "Keep it under 1000 characters") });
 
 export async function POST(req: Request) {
+  const limited = await rateLimit(req, "policy_draft", 10, 3600);
+  if (limited) return limited;
   const parsed = body.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return fail(400, parsed.error.issues[0]?.message ?? "Invalid request");
   try {

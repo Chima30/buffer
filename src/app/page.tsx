@@ -20,8 +20,8 @@ const example = computeSettlement({
 const steps = [
   ["Order", "A customer orders a research report and writes a brief."],
   ["Payment", "Testnet USDC goes straight to the business contract, not to the agent."],
-  ["Work", "The agent plans, has the contract pay an approved vendor, and runs private inference."],
-  ["Delivery", "The report ships with a signature showing which model produced it."],
+  ["Work", "The agent plans and has the contract pay an approved vendor, on NEAR or on Ethereum through Chain Signatures."],
+  ["Delivery", "The report ships with the TEE's signature and NVIDIA's verdict on the GPU that produced it."],
   ["Settlement", "The contract deducts expenses, then splits net revenue 70/30."],
 ] as const;
 
@@ -40,6 +40,8 @@ export default function Home() {
         <div className="mt-6 flex flex-wrap gap-3">
           <Link href="/store" className="rounded-md bg-ink px-4 py-2 text-sm font-medium text-paper">Order a research brief</Link>
           <Link href="/ledger" className="rounded-md border border-rule-strong px-4 py-2 text-sm">View the public ledger</Link>
+          <Link href="/security" className="rounded-md border border-rule-strong px-4 py-2 text-sm">See the attacks we block</Link>
+          <Link href="/new" className="rounded-md border border-rule-strong px-4 py-2 text-sm">Start your own business</Link>
         </div>
       </section>
 
@@ -86,9 +88,9 @@ export default function Home() {
                 <StatusBadge status={s} />
                 <span className="text-ink-2">
                   {{
-                    REAL: "Confirmed on NEAR testnet, with an explorer link.",
+                    REAL: "Confirmed on NEAR testnet or Ethereum Sepolia, with an explorer link.",
                     QUOTE: "A live NEAR Intents price. No funds moved.",
-                    SIMULATED: "NEAR Intents has no testnet, so cross-chain settlement is shown, not performed.",
+                    SIMULATED: "NEAR Intents has no testnet, so an Intents settlement is shown, not performed.",
                     PENDING: "Submitted, waiting for confirmation.",
                     FAILED: "Did not complete. Nothing is assumed.",
                   }[s]}

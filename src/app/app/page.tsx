@@ -16,6 +16,9 @@ interface Overview {
   totals: { revenue: string; vendorSpend: string; inferenceSpend: string; net: string; ownerPaid: string; contributorPaid: string };
   pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; chain: "near" | "sepolia"; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string | null; evm_address: string | null } }[];
   treasury: { address: string; eth: string; usdc: string; explorerUrl: string } | null;
+  alerts: string[];
+  refunds: { id: string; onchain_order_id: string; state: string; price_units: string; topUpUnits: string }[];
+  tokenId: string;
   orders: { id: string; onchain_order_id: string; state: string; price_units: string; created_at: string }[];
   recentActions: { tool: string; decision: "allow" | "deny" | "needs_approval"; reasons: { code: string; message: string; ruleId?: string }[]; policy_version: number; at: string }[];
 }
@@ -130,6 +133,7 @@ export default function OwnerConsole() {
       {wallet.signedAccountId && data && !isOwner && <Banner tone="failed">Connected as {wallet.signedAccountId}. Only {data.contract.owner} can act; the contract would reject anyone else.</Banner>}
       {notice && <Banner tone={notice.tone}>{notice.text}</Banner>}
       {error && <Banner tone="failed">{error}</Banner>}
+      {data?.alerts.map((a) => <Banner key={a} tone="pending">Low balance: {a}</Banner>)}
       {!data && !error && <p className="mt-8 text-ink-3">Loading…</p>}
 
       {data && (
@@ -202,6 +206,30 @@ export default function OwnerConsole() {
                   </ul>
                 )}
               </Card>
+
+              {data.refunds.length > 0 && (
+                <Card title="Refunds">
+                  <p className="text-sm text-ink-2">Return a customer&apos;s payment in full. A refund stops the agent on that order. If the vendor was already paid from escrow, you top up that amount first so the customer gets all of it back.</p>
+                  <ul className="mt-3 space-y-3">
+                    {data.refunds.map((r) => {
+                      const topUp = BigInt(r.topUpUnits) > 0n;
+                      const topUpCmd = `near --% contract call-function as-transaction ${data.tokenId} ft_transfer_call json-args "{\\"receiver_id\\":\\"${data.contract.id}\\",\\"amount\\":\\"${r.topUpUnits}\\",\\"msg\\":\\"{\\\\\\"refund_top_up\\\\\\":\\\\\\"${r.onchain_order_id}\\\\\\"}\\"}" prepaid-gas "100 Tgas" attached-deposit "1 yoctoNEAR" sign-as ${data.contract.owner} network-config testnet sign-with-keychain send`;
+                      return (
+                        <li key={r.id} className="rounded-md border border-rule p-3 text-sm">
+                          <div className="flex items-center justify-between gap-2">
+                            <Link href={`/orders/${r.id}`} className="font-mono text-xs text-accent">{r.onchain_order_id}</Link>
+                            <span className="text-xs text-ink-3">{r.state.replace(/_/g, " ").toLowerCase()}</span>
+                          </div>
+                          {topUp && (
+                            <CliFallback label={`1. Top up ${(Number(r.topUpUnits) / 1e6).toFixed(2)} USDC`} command={topUpCmd} busy={!!busy} onSubmit={(h) => recordPasted("Refund top-up", h)} />
+                          )}
+                          <CliFallback label={`${topUp ? "2. " : ""}Refund the customer`} command={cliCommand(data.contract.id, "refund", { order_id: r.onchain_order_id }, data.contract.owner)} busy={!!busy} onSubmit={(h) => recordPasted("Refund", h)} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </Card>
+              )}
 
               <Card title="Agent decisions">
                 <ul className="divide-y divide-rule text-sm">

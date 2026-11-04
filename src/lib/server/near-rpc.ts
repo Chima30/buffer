@@ -102,3 +102,15 @@ export async function isStorageRegistered(tokenId: string, accountId: string): P
   const v = await viewFunction<{ total: string } | null>(tokenId, "storage_balance_of", { account_id: accountId });
   return v !== null;
 }
+
+/** Spendable NEAR (yoctoNEAR) of an account, after what its storage locks. */
+export async function nearBalance(accountId: string): Promise<{ total: bigint; spendable: bigint } | null> {
+  try {
+    const a = await rpc<{ amount: string; locked: string; storage_usage: number }>("query", { request_type: "view_account", finality: "final", account_id: accountId });
+    const storage = BigInt(a.storage_usage) * 10n ** 19n; // 1e19 yocto per byte
+    const total = BigInt(a.amount);
+    return { total, spendable: total > storage ? total - storage : 0n };
+  } catch {
+    return null;
+  }
+}

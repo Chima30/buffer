@@ -4,15 +4,18 @@
  * the transaction was signed by the contract owner and emitted one of:
  *   buffer: purchase_approved (+ purchase_paid), purchase_rejected, paused, unpaused,
  *           policy_anchored, approval_threshold_set,
- *           evm_purchase_approved / _signed / _rejected, evm_config_set, evm_vendor_set, evm_nonce_set
+ *           evm_purchase_approved / _signed / _rejected, evm_config_set, evm_vendor_set, evm_nonce_set,
+ *           refund_topped_up, refund_started, leg_confirmed (refund leg), order_refunded
  *   near-outlayer: WalletFrozenChanged for this agent's wallet
  * Anyone may submit a hash; a hash only ever proves what the owner already did.
  */
 import { after } from "next/server";
 import { z } from "zod";
-import { runDueJobs } from "@/lib/server/agent/runtime";
+import { canTransition } from "@/lib/domain/order-machine";
+import { loadOrder, runDueJobs, transition } from "@/lib/server/agent/runtime";
 import { db } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
+import { rateLimit } from "@/lib/server/rate-limit";
 import { fail, json } from "@/lib/server/http";
 import { promoteAnchoredDraft } from "@/lib/server/business";
 import { getConfig } from "@/lib/server/contract";
@@ -24,6 +27,8 @@ export const maxDuration = 300;
 const body = z.object({ txHash: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{43,44}$/, "Not a NEAR transaction hash") });
 
 export async function POST(req: Request) {
+  const limited = await rateLimit(req, "confirm", 60, 3600);
+  if (limited) return limited;
   const parsed = body.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return fail(400, parsed.error.issues[0]?.message ?? "Invalid request");
   const { txHash } = parsed.data;
@@ -64,6 +69,24 @@ export async function POST(req: Request) {
       recorded.push(e.event);
     } else if (e.event === "evm_config_set" || e.event === "evm_vendor_set" || e.event === "evm_nonce_set") {
       await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
+      recorded.push(e.event);
+    } else if (e.event === "refund_topped_up") {
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "refund_topped_up", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: near.ownerAccountId });
+      recorded.push(e.event);
+    } else if (e.event === "refund_started") {
+      if (orderRow) {
+        const o = await loadOrder(orderRow.id);
+        if (canTransition(o.state, "REFUND_PENDING")) await transition(o, "REFUND_PENDING", "owner started a refund on-chain");
+        await db().from("jobs").update({ status: "done", lease_until: null, last_error: "order is being refunded" }).eq("order_id", orderRow.id).in("status", ["queued", "running"]);
+      }
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "refund_started", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: String(e.data.to), details: { shortfall: e.data.shortfall } });
+      recorded.push(e.event);
+    } else if (e.event === "leg_confirmed" && e.data.kind === "Refund") {
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "refund_paid", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: String(e.data.recipient) });
+      recorded.push("refund_paid");
+    } else if (e.event === "order_refunded" && orderRow) {
+      const o = await loadOrder(orderRow.id);
+      if (canTransition(o.state, "REFUNDED")) await transition(o, "REFUNDED", "refund confirmed on-chain");
       recorded.push(e.event);
     } else if (e.event === "policy_anchored") {
       const promoted = await promoteAnchoredDraft(business.id, await getConfig(), txHash);

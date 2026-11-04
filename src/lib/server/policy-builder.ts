@@ -8,7 +8,7 @@
  * A draft has no effect until the owner anchors its hash on-chain. The runtime
  * only ever acts under the policy whose hash the contract holds.
  */
-import { applyEdit, approvalThresholdUnits, describeChanges, editableValues, EDITABLE, lintPolicy, policyEditSchema, type Change } from "@/lib/domain/policy/draft";
+import { applyEdit, approvalThresholdUnits, describeChanges, editableValues, EDITABLE, lintPolicy, policyEditSchema, type Change, type PolicyEdit } from "@/lib/domain/policy/draft";
 import { policyHash } from "@/lib/domain/policy/hash";
 import { formatUnits } from "@/lib/domain/money";
 import type { PolicyDocument } from "@/lib/domain/policy/schema";
@@ -57,29 +57,26 @@ function messages(text: string, current: PolicyDocument): ChatMessage[] {
   ];
 }
 
-export async function draftPolicy(text: string): Promise<DraftResult> {
-  const onchain = await getConfig();
-  const pre = await loadBusiness();
-  await promoteAnchoredDraft(pre.business.id, onchain);
+/**
+ * The only AI step: owner's English -> strict edit JSON, via private TEE inference.
+ * Shared by the policy builder and the start-a-business draft; capped per day.
+ */
+export async function translateRules(text: string, current: PolicyDocument, purpose: "policy_draft" | "onboarding_draft"): Promise<{ edit: PolicyEdit | null; error?: string; verification: string; chatId: string }> {
   const ctx = await loadBusiness();
-  if (onchain.paused || ctx.business.status !== "active") throw new Error("The business is paused; resume it before changing the rules");
-
   const today = new Date();
   today.setUTCHours(0, 0, 0, 0);
-  const used = await db().from("inference_calls").select("id", { count: "exact", head: true }).eq("purpose", "policy_draft").gte("created_at", today.toISOString());
-  if ((used.count ?? 0) >= MAX_DRAFTS_PER_DAY) throw new Error("Daily limit for policy drafts reached; try again tomorrow");
-
+  const used = await db().from("inference_calls").select("id", { count: "exact", head: true }).in("purpose", ["policy_draft", "onboarding_draft"]).gte("created_at", today.toISOString());
+  if ((used.count ?? 0) >= MAX_DRAFTS_PER_DAY) throw new Error("Daily limit for AI rule drafts reached; try again tomorrow");
   const out = await runInference({
     ctx,
     evalCtx: await evaluationContext(ctx),
     orderId: null,
-    purpose: "policy_draft",
-    messages: messages(text, ctx.policy),
+    purpose,
+    messages: messages(text, current),
     maxTokens: 1200,
     json: true,
-    idempotencyKey: `policy-draft:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
+    idempotencyKey: `${purpose}:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
   });
-
   const start = out.content.indexOf("{");
   const end = out.content.lastIndexOf("}");
   let raw: unknown = null;
@@ -89,10 +86,24 @@ export async function draftPolicy(text: string): Promise<DraftResult> {
     raw = null;
   }
   const parsed = policyEditSchema.safeParse(raw);
-  const base = { verification: out.verification, chatId: out.chatId };
-  if (!parsed.success) {
-    return { ...base, version: ctx.policy.version + 1, hash: null, changes: [], warnings: [], errors: [`The AI's translation did not pass validation: ${parsed.error.issues[0]?.message ?? "invalid"}. Try rephrasing.`], unsupported: [], commands: [] };
+  return parsed.success
+    ? { edit: parsed.data, verification: out.verification, chatId: out.chatId }
+    : { edit: null, error: `The AI's translation did not pass validation: ${parsed.error.issues[0]?.message ?? "invalid"}. Try rephrasing.`, verification: out.verification, chatId: out.chatId };
+}
+
+export async function draftPolicy(text: string): Promise<DraftResult> {
+  const onchain = await getConfig();
+  const pre = await loadBusiness();
+  await promoteAnchoredDraft(pre.business.id, onchain);
+  const ctx = await loadBusiness();
+  if (onchain.paused || ctx.business.status !== "active") throw new Error("The business is paused; resume it before changing the rules");
+
+  const t = await translateRules(text, ctx.policy, "policy_draft");
+  const base = { verification: t.verification, chatId: t.chatId };
+  if (!t.edit) {
+    return { ...base, version: ctx.policy.version + 1, hash: null, changes: [], warnings: [], errors: [t.error ?? "Could not translate the rules"], unsupported: [], commands: [] };
   }
+  const parsed = { data: t.edit };
 
   const next = applyEdit(ctx.policy, parsed.data);
   const changes = describeChanges(ctx.policy, next);

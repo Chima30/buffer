@@ -42,7 +42,7 @@ type StepResult = { next?: Step; delaySec?: number; repeat?: boolean };
 
 // ---------- helpers ----------
 
-async function loadOrder(id: string): Promise<OrderRow> {
+export async function loadOrder(id: string): Promise<OrderRow> {
   return must(await db().from("orders").select("id,business_id,state,brief,price_units,onchain_order_id,product_id,plan").eq("id", id).single(), "order");
 }
 
@@ -466,6 +466,11 @@ interface JobRow {
 
 async function runJob(job: JobRow): Promise<void> {
   const order = await loadOrder(job.order_id);
+  // A refund (started by the owner or after a failure) ends the agent's work on the order.
+  if (order.state === "REFUND_PENDING" || order.state === "REFUNDED") {
+    await db().from("jobs").update({ status: "done", lease_until: null, last_error: "order is being refunded" }).eq("id", job.id);
+    return;
+  }
   try {
     const base = await loadBusinessAnchored();
     // Each order works with its own product and that product's vendor.
