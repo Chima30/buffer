@@ -13,17 +13,45 @@ interface RpcError {
   data?: unknown;
 }
 
+/** Public testnet endpoints tried after the configured one; the old shared RPC rate-limits bursts. */
+const FALLBACK_RPCS = ["https://rpc.testnet.fastnear.com", "https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"];
+
 async function rpc<T>(method: string, params: unknown): Promise<T> {
   const { rpcUrl } = nearConfig();
-  const res = await fetch(rpcUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: "buffer", method, params }),
-  });
-  if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`);
-  const j = (await res.json()) as { result?: T; error?: RpcError };
-  if (j.error) throw new Error(`RPC ${method} error: ${j.error.cause?.name ?? j.error.name ?? JSON.stringify(j.error)}`);
-  return j.result as T;
+  const urls = [...new Set([rpcUrl, ...FALLBACK_RPCS])];
+  let lastError: Error | null = null;
+  for (const url of urls) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: "buffer", method, params }),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (e) {
+      lastError = new Error(`RPC ${method} unreachable at ${new URL(url).host}: ${(e as Error).message}`);
+      continue;
+    }
+    // Rate limits and server errors: try the next endpoint.
+    if (res.status === 429 || res.status >= 500) {
+      lastError = new Error(`RPC ${method} HTTP ${res.status} at ${new URL(url).host}`);
+      continue;
+    }
+    if (!res.ok) throw new Error(`RPC ${method} HTTP ${res.status}`);
+    const j = (await res.json()) as { result?: T; error?: RpcError };
+    if (j.error) {
+      const name = j.error.cause?.name ?? j.error.name ?? JSON.stringify(j.error);
+      // A node-side timeout is not an answer; anything else (unknown tx, bad method) is.
+      if (name === "TIMEOUT_ERROR" || name === "INTERNAL_ERROR") {
+        lastError = new Error(`RPC ${method} error: ${name}`);
+        continue;
+      }
+      throw new Error(`RPC ${method} error: ${name}`);
+    }
+    return j.result as T;
+  }
+  throw lastError ?? new Error(`RPC ${method} failed`);
 }
 
 export async function viewFunction<T>(contractId: string, method: string, args: Record<string, unknown> = {}): Promise<T> {
