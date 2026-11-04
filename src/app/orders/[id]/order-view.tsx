@@ -16,6 +16,7 @@ interface OrderData {
   contractId: string;
   tokenContract: string;
   sku: string;
+  productTitle?: string;
   state: string;
   priceUnits: string;
   authorised: boolean;
@@ -44,6 +45,7 @@ const EVENT_LABELS: Record<string, string> = {
   purchase_awaiting_approval: "Dataset purchase waiting for owner approval",
   purchase_approved: "Owner approved the purchase",
   vendor_paid: "Vendor paid by the contract",
+  crosschain_payment_signed: "Payment signed by NEAR Chain Signatures",
   purchase_blocked: "Purchase blocked by policy",
   purchase_rejected: "Purchase rejected",
   purchase_rejected_by_owner: "Owner rejected the purchase",
@@ -103,7 +105,7 @@ export function OrderView() {
           <section className="mt-10 flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="font-mono text-xs text-ink-3">Order {order.onchainOrderId}</p>
-              <h1 className="mt-1 text-2xl font-semibold tracking-tight">{order.plan?.title ?? "Weekly Market Brief"}</h1>
+              <h1 className="mt-1 text-2xl font-semibold tracking-tight">{order.plan?.title ?? order.productTitle ?? "Weekly Market Brief"}</h1>
             </div>
             <Money units={order.priceUnits} className="text-lg" />
           </section>
@@ -285,7 +287,9 @@ function Ledger({ entries }: { entries: OrderData["ledger"] }) {
             return (
             <li key={i} className={`flex flex-col gap-1 py-2.5 ${resolved ? "opacity-60" : ""}`}>
               <div className="flex items-center justify-between gap-2">
-                <span>{EVENT_LABELS[e.event_type] ?? e.event_type}</span>
+                <span>
+                  {e.event_type === "vendor_paid" && e.details?.chain === "sepolia" ? "Vendor paid on Ethereum Sepolia (Chain Signatures)" : (EVENT_LABELS[e.event_type] ?? e.event_type)}
+                </span>
                 <StatusBadge status={e.status} />
               </div>
               {resolved && <span className="text-xs text-ink-3">Resolved: {(EVENT_LABELS[resolved.event_type] ?? resolved.event_type).toLowerCase()}</span>}

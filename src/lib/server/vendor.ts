@@ -29,3 +29,28 @@ export async function deliverDataset(onchainOrderId: string, purchaseIndex: numb
   if (p.status !== "Paid") return { ok: false, reason: `Purchase status is ${p.status}, not Paid` };
   return { ok: true, dataset: VENDOR_DATASET };
 }
+
+/**
+ * Demo vendor on Ethereum Sepolia. Payment is a REAL Sepolia USDC transfer from the
+ * Buffer treasury (signed by NEAR Chain Signatures); the dataset is a small static
+ * pack written for this demo and labelled as such.
+ */
+export const EVM_VENDOR_DATASET = {
+  label: "Demo vendor dataset: Ethereum & cross-chain reference notes (static, compiled for the Buffer demo)",
+  version: "2026-11-04",
+  notes: [
+    { topic: "Chain Signatures", note: "A NEAR account or contract can control addresses on other chains. The MPC network signs a payload for a key derived from (account, path); the caller builds and broadcasts the foreign transaction.", source: "https://docs.near.org/chain-abstraction/chain-signatures" },
+    { topic: "EIP-1559 transactions", note: "Type-2 Ethereum transactions carry maxFeePerGas and maxPriorityFeePerGas; the signed payload is keccak256(0x02 || rlp(fields)).", source: "https://eips.ethereum.org/EIPS/eip-1559" },
+    { topic: "USDC on Ethereum Sepolia", note: "Circle publishes a testnet USDC contract on Sepolia (6 decimals) and a faucet for test funds; test USDC has no value.", source: "https://developers.circle.com/stablecoins/usdc-contract-addresses" },
+    { topic: "ERC-20 transfer", note: "transfer(address,uint256) moves tokens from the sender and emits a Transfer(from, to, value) event, which is how a payment is verified from the receipt.", source: "https://eips.ethereum.org/EIPS/eip-20" },
+  ],
+};
+
+export async function deliverEvmDataset(onchainOrderId: string, index: number, evmTxHash: string | null): Promise<{ ok: true; dataset: typeof EVM_VENDOR_DATASET } | { ok: false; reason: string }> {
+  const { getEvmPurchases, treasury, verifyUsdcTransfer } = await import("./evm");
+  if (!evmTxHash) return { ok: false, reason: "No Sepolia transaction recorded" };
+  const p = (await getEvmPurchases(onchainOrderId))[index];
+  if (!p || p.status !== "Signed") return { ok: false, reason: "Purchase is not signed on-chain" };
+  const check = await verifyUsdcTransfer(evmTxHash as `0x${string}`, { token: p.token, from: await treasury(), to: p.vendor, amount: BigInt(p.amount) });
+  return check.state === "CONFIRMED" ? { ok: true, dataset: EVM_VENDOR_DATASET } : { ok: false, reason: `Sepolia payment not confirmed (${check.state})` };
+}

@@ -3,7 +3,8 @@
  * Records an owner action AFTER verifying it on NEAR testnet. Accepted only if
  * the transaction was signed by the contract owner and emitted one of:
  *   buffer: purchase_approved (+ purchase_paid), purchase_rejected, paused, unpaused,
- *           policy_anchored, approval_threshold_set
+ *           policy_anchored, approval_threshold_set,
+ *           evm_purchase_approved / _signed / _rejected, evm_config_set, evm_vendor_set, evm_nonce_set
  *   near-outlayer: WalletFrozenChanged for this agent's wallet
  * Anyone may submit a hash; a hash only ever proves what the owner already did.
  */
@@ -51,6 +52,18 @@ export async function POST(req: Request) {
       recorded.push(e.event);
     } else if (e.event === "purchase_rejected") {
       await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_rejected_by_owner", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId });
+      recorded.push(e.event);
+    } else if (e.event === "evm_purchase_approved") {
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_approved", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: { chain: "sepolia" } });
+      recorded.push(e.event);
+    } else if (e.event === "evm_purchase_signed") {
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "crosschain_payment_signed", status: "REAL", txHash, verifiedOnChain: true, counterparty: "NEAR Chain Signatures (MPC)", details: { chain: "sepolia", nonce: e.data.nonce, payload_hash: e.data.payload_hash } });
+      recorded.push(e.event);
+    } else if (e.event === "evm_purchase_rejected") {
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_rejected_by_owner", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: { chain: "sepolia" } });
+      recorded.push(e.event);
+    } else if (e.event === "evm_config_set" || e.event === "evm_vendor_set" || e.event === "evm_nonce_set") {
+      await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
       recorded.push(e.event);
     } else if (e.event === "policy_anchored") {
       const promoted = await promoteAnchoredDraft(business.id, await getConfig(), txHash);

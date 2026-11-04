@@ -109,7 +109,7 @@ export function lintPolicy(current: PolicyDocument, next: PolicyDocument, maxExp
 
   // Structural parts the builder must never change.
   if (!same(r.prohibitions, current.rules.prohibitions)) errors.push("Prohibitions changed. The builder may not edit them.");
-  if (!same(r.destinations, current.rules.destinations)) errors.push("Payment allowlist changed. The builder may not edit it.");
+  if (!same(r.destinations, current.rules.destinations) || !same(r.crosschain, current.rules.crosschain)) errors.push("Payment allowlist changed. The builder may not edit it.");
   if (!same(r.agent_permissions, current.rules.agent_permissions)) errors.push("Agent permissions changed. The builder may not edit them.");
   if (!same(r.procurement.approved_vendor_ids, current.rules.procurement.approved_vendor_ids)) errors.push("Approved vendors changed. The builder may not edit them.");
   if (!r.prohibitions.some((p) => p.when.destination_not_in_allowlist)) errors.push("The block on payments to unapproved wallets is missing.");

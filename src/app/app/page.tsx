@@ -14,7 +14,8 @@ interface Overview {
   policyAnchored: boolean;
   agent: { id: string; name: string; role: string; near_account: string; status: "running" | "paused" | "frozen"; walletPubkey: string | null } | null;
   totals: { revenue: string; vendorSpend: string; inferenceSpend: string; net: string; ownerPaid: string; contributorPaid: string };
-  pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string } }[];
+  pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; chain: "near" | "sepolia"; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string | null; evm_address: string | null } }[];
+  treasury: { address: string; eth: string; usdc: string; explorerUrl: string } | null;
   orders: { id: string; onchain_order_id: string; state: string; price_units: string; created_at: string }[];
   recentActions: { tool: string; decision: "allow" | "deny" | "needs_approval"; reasons: { code: string; message: string; ruleId?: string }[]; policy_version: number; at: string }[];
 }
@@ -153,30 +154,37 @@ export default function OwnerConsole() {
                   <p className="text-sm text-ink-3">Nothing waiting. Purchases above <Money units={data.contract.approvalAboveUnits} /> will appear here.</p>
                 ) : (
                   <ul className="space-y-4">
-                    {data.pendingApprovals.map((p) => (
+                    {data.pendingApprovals.map((p) => {
+                      const evm = p.chain === "sepolia";
+                      const approve = evm ? "approve_evm_purchase" : "approve_purchase";
+                      const reject = evm ? "reject_evm_purchase" : "reject_purchase";
+                      const args = { order_id: p.orders.onchain_order_id, index: p.onchain_index };
+                      return (
                       <li key={p.id} className="rounded-md border border-rule p-4">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="font-medium">{p.vendors.name}</span>
                           <Money units={p.amount_units} />
                         </div>
                         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-ink-3">
-                          <dt>Destination</dt><dd className="font-mono">{p.vendors.near_account}</dd>
+                          <dt>Destination</dt><dd className="break-all font-mono">{evm ? p.vendors.evm_address : p.vendors.near_account}</dd>
+                          <dt>Chain</dt><dd>{evm ? "Ethereum Sepolia (signed by NEAR Chain Signatures)" : "NEAR testnet"}</dd>
                           <dt>Order</dt><dd className="font-mono">{p.orders.onchain_order_id}, purchase #{p.onchain_index}</dd>
                           <dt>Rule</dt><dd>Purchases above <Money units={data.contract.approvalAboveUnits} /> need the owner (A-1)</dd>
-                          <dt>Paid from</dt><dd>this order&apos;s escrow, by the contract</dd>
+                          <dt>Paid from</dt><dd>{evm ? "the contract's Ethereum treasury (you are reimbursed at settlement)" : "this order's escrow, by the contract"}</dd>
                         </dl>
                         <div className="mt-3 flex gap-2">
-                          <button disabled={!isOwner || !!busy} onClick={() => act("Approve purchase", data.contract.id, "approve_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index })} className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-paper disabled:opacity-40">Approve</button>
-                          <button disabled={!isOwner || !!busy} onClick={() => act("Reject purchase", data.contract.id, "reject_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index }, "30000000000000")} className="rounded-md border border-rule-strong px-3 py-1.5 text-sm disabled:opacity-40">Reject</button>
+                          <button disabled={!isOwner || !!busy} onClick={() => act("Approve purchase", data.contract.id, approve, args, evm ? "150000000000000" : "100000000000000")} className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-paper disabled:opacity-40">Approve</button>
+                          <button disabled={!isOwner || !!busy} onClick={() => act("Reject purchase", data.contract.id, reject, args, "30000000000000")} className="rounded-md border border-rule-strong px-3 py-1.5 text-sm disabled:opacity-40">Reject</button>
                         </div>
                         <CliFallback
                           label="Approve purchase"
-                          command={cliCommand(data.contract.id, "approve_purchase", { order_id: p.orders.onchain_order_id, index: p.onchain_index }, data.contract.owner)}
+                          command={cliCommand(data.contract.id, approve, args, data.contract.owner, evm ? "150 Tgas" : "100 Tgas")}
                           busy={!!busy}
                           onSubmit={(h) => recordPasted("Approve purchase", h)}
                         />
                       </li>
-                    ))}
+                      );
+                    })}
                   </ul>
                 )}
               </Card>
@@ -283,6 +291,17 @@ export default function OwnerConsole() {
 
                 <PolicyBuilder onDrafted={load} />
               </Card>
+
+              {data.treasury && (
+                <Card title="Ethereum treasury (Chain Signatures)">
+                  <p className="text-xs text-ink-2">Controlled by the business contract through NEAR&apos;s MPC network. No one holds its private key; the contract signs only USDC transfers to approved vendors.</p>
+                  <a href={data.treasury.explorerUrl} target="_blank" rel="noreferrer" className="mt-2 block break-all font-mono text-xs text-accent">{data.treasury.address} ↗</a>
+                  <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
+                    <dt className="text-ink-3">USDC</dt><dd className="text-right"><Money units={data.treasury.usdc} /></dd>
+                    <dt className="text-ink-3">ETH (gas)</dt><dd className="text-right font-mono">{(Number(BigInt(data.treasury.eth) / 10n ** 12n) / 1e6).toFixed(4)}</dd>
+                  </dl>
+                </Card>
+              )}
 
               <Card title="Agent">
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">

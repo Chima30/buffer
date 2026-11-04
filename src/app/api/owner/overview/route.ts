@@ -11,6 +11,8 @@ import type { PolicyDocument } from "@/lib/domain/policy/schema";
 import { promoteAnchoredDraft } from "@/lib/server/business";
 import { db } from "@/lib/server/db";
 import { openDraft, ownerCommands } from "@/lib/server/policy-builder";
+import { treasuryBalances } from "@/lib/server/evm";
+import { sepoliaConfig } from "@/lib/server/env";
 import { nearConfig } from "@/lib/server/env";
 import { json } from "@/lib/server/http";
 
@@ -31,7 +33,7 @@ export async function GET() {
     db().from("procurements").select("v:amount_units").eq("status", "confirmed"),
     db().from("inference_calls").select("v:cost_usd_micros").not("order_id", "is", null),
     db().from("distributions").select("leg,amount_units,status"),
-    db().from("procurements").select("id,amount_units,onchain_index,created_at,orders!inner(onchain_order_id,state),vendors!inner(name,near_account)").eq("status", "awaiting_approval"),
+    db().from("procurements").select("id,amount_units,onchain_index,created_at,chain,orders!inner(onchain_order_id,state),vendors!inner(name,near_account,evm_address)").eq("status", "awaiting_approval"),
     db().from("orders").select("id,onchain_order_id,state,price_units,created_at,updated_at").order("created_at", { ascending: false }).limit(10),
     db().from("agent_actions").select("tool,decision,reasons,policy_version,at").order("at", { ascending: false }).limit(12),
   ]);
@@ -49,7 +51,11 @@ export async function GET() {
     return commands.length ? { version: activeDoc.version, hash: policy.data.rules_hash, sourceText: policy.data.source_text, createdAt: policy.data.activated_at, commands } : null;
   })() : null);
 
+  const t = await treasuryBalances().catch(() => null);
+  const treasury = t ? { address: t.address, eth: t.eth.toString(), usdc: t.usdc.toString(), explorerUrl: sepoliaConfig().explorerAddressUrl(t.address) } : null;
+
   return json({
+    treasury,
     business: business.data,
     contract: {
       id: near.contractId,

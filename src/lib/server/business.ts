@@ -10,28 +10,45 @@ import { getConfig, type OnchainConfig } from "./contract";
 import { db, must } from "./db";
 import { nearConfig } from "./env";
 
+export interface ProductRow { id: string; sku: string; title: string; description: string | null; price_units: string; max_expense_units: string; vendor_id: string | null }
+export interface VendorRow { id: string; name: string; near_account: string | null; sku: string; unit_price_units: string; chain: "near" | "sepolia"; evm_address: string | null; description: string | null }
+
 export interface BusinessContext {
   business: { id: string; name: string; contract_id: string; status: "active" | "paused" };
   agent: { id: string; near_account: string; status: "running" | "paused" | "frozen" };
-  product: { id: string; sku: string; title: string; description: string | null; price_units: string; max_expense_units: string };
-  vendor: { id: string; name: string; near_account: string; sku: string; unit_price_units: string };
+  /** Default product (the first active one) and its vendor. Per-order work uses `scopeFor`. */
+  product: ProductRow;
+  vendor: VendorRow;
+  products: ProductRow[];
+  vendors: VendorRow[];
   policy: PolicyDocument;
   contributorBps: number;
+}
+
+/** The product an order bought and the vendor that product may buy data from. */
+export function scopeFor(ctx: BusinessContext, productId: string | null | undefined): { product: ProductRow; vendor: VendorRow } {
+  const product = ctx.products.find((p) => p.id === productId) ?? ctx.product;
+  const vendor = ctx.vendors.find((v) => v.id === product.vendor_id) ?? ctx.vendors.find((v) => v.chain === "near") ?? ctx.vendor;
+  return { product, vendor };
 }
 
 export async function loadBusiness(): Promise<BusinessContext> {
   const { contractId } = nearConfig();
   const business = must(await db().from("businesses").select("id,name,contract_id,status").eq("contract_id", contractId).single(), "business");
   const agent = must(await db().from("agents").select("id,near_account,status").eq("business_id", business.id).limit(1).single(), "agent");
-  const product = must(
-    await db().from("products").select("id,sku,title,description,price_units,max_expense_units").eq("business_id", business.id).eq("active", true).limit(1).single(),
-    "product",
+  const products = must<ProductRow[]>(
+    await db().from("products").select("id,sku,title,description,price_units,max_expense_units,vendor_id").eq("business_id", business.id).eq("active", true).order("sku"),
+    "products",
   );
-  const vendor = must(await db().from("vendors").select("id,name,near_account,sku,unit_price_units").eq("business_id", business.id).eq("approved", true).limit(1).single(), "vendor");
+  const vendors = must<VendorRow[]>(await db().from("vendors").select("id,name,near_account,sku,unit_price_units,chain,evm_address,description").eq("business_id", business.id).eq("approved", true).order("name"), "vendors");
+  // Default: the NEAR-paid product first, so existing behaviour is unchanged.
+  const product = products.find((p) => p.sku === "weekly-market-brief") ?? products[0];
+  const vendor = vendors.find((v) => v.chain === "near") ?? vendors[0];
+  if (!product || !vendor) throw new Error("Business has no active product or approved vendor");
   const policyRow = must(await db().from("policies").select("rules,version,business_id").eq("business_id", business.id).eq("status", "active").single(), "active policy");
   const cfg = must(await db().from("business_config").select("contributor_bps").eq("business_id", business.id).single(), "business config");
   const policy = policyDocumentSchema.parse({ version: policyRow.version, business_id: policyRow.business_id, rules: policyRow.rules });
-  return { business, agent, product, vendor, policy, contributorBps: cfg.contributor_bps };
+  return { business, agent, product, vendor, products, vendors, policy, contributorBps: cfg.contributor_bps };
 }
 
 /** The runtime calls this before every effectful step. */

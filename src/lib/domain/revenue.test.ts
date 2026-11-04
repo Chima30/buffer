@@ -117,3 +117,23 @@ describe("computeRefund", () => {
     expect(r.ownerTopUpRequired).toBe(0n);
   });
 });
+
+describe("cross-chain (treasury) purchases", () => {
+  it("reimburses the owner like the contract's settle (matches contract test numbers)", () => {
+    const r = computeSettlement({
+      gross: toUnits("20"),
+      maxExpense: toUnits("13"),
+      contributorBps: 3000,
+      expenses: [exp({ id: "evm", category: "treasury", amount: toUnits("5"), evidenceRef: "sepolia:0xabc" }), exp({ id: "llm", category: "inference", amount: 1_000n, evidenceRef: "chat:1" })],
+    });
+    expect(r.paidToVendors).toBe(0n);
+    expect(r.reimbOwner).toBe(5_001_000n);
+    expect(r.contributorShare).toBe(4_499_700n);
+    expect(r.ownerShare).toBe(10_499_300n);
+  });
+  it("ignores treasury expenses without evidence", () => {
+    const r = computeSettlement({ gross: toUnits("20"), maxExpense: toUnits("13"), contributorBps: 3000, expenses: [exp({ id: "evm", category: "treasury", amount: toUnits("5"), evidenceRef: null })] });
+    expect(r.excludedExpenseIds).toEqual(["evm"]);
+    expect(r.reimbOwner).toBe(0n);
+  });
+});

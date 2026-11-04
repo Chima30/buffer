@@ -14,6 +14,10 @@
  *   reimbOwner = E - V  (inference credits the owner prepaid)
  *
  * Invariant: V + reimbOwner + C + O === G.
+ *
+ * "treasury" expenses (PAID) are cross-chain vendor payments made from the
+ * owner-funded Ethereum treasury through Chain Signatures. Like inference they are
+ * reimbursed to the owner inside the cap, exactly as the contract's settle does.
  * The agent never holds funds: vendors are paid by the contract, not reimbursed.
  */
 
@@ -22,7 +26,7 @@ import { minUnits, sumUnits, type Units } from "./money";
 export const FORMULA_VERSION = 2;
 export const BPS_DENOMINATOR = 10_000n;
 
-export type ExpenseCategory = "supplier" | "inference";
+export type ExpenseCategory = "supplier" | "inference" | "treasury";
 export type ExpenseStatus = "PAID" | "METERED" | "PENDING" | "REJECTED";
 
 export interface ExpenseInput {
@@ -96,11 +100,17 @@ export function computeSettlement(input: SettlementInput): SettlementResult {
     return ok;
   });
 
+  const treasury = input.expenses.filter((e) => {
+    const ok = e.category === "treasury" && e.status === "PAID" && hasEvidence(e);
+    if (e.category === "treasury" && !ok) excluded.push(e.id);
+    return ok;
+  });
+
   const paidToVendors = sumUnits(vendor.map((e) => e.amount));
   if (paidToVendors > maxExpense || paidToVendors > gross) {
     throw new Error("Vendor payments exceed the expense cap; the contract would never allow this");
   }
-  const claimed = paidToVendors + sumUnits(inference.map((e) => e.amount));
+  const claimed = paidToVendors + sumUnits(inference.map((e) => e.amount)) + sumUnits(treasury.map((e) => e.amount));
   const expenses = minUnits(claimed, maxExpense, gross);
   const uncounted = claimed - expenses;
   const distributable = gross - expenses;

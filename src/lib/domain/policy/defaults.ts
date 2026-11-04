@@ -63,3 +63,24 @@ export function defaultResearchDeskPolicy(params: {
     },
   };
 }
+
+/**
+ * Policy v3: the same rules plus cross-chain purchases through Chain Signatures.
+ * Adds the tool to the agent, the EVM vendor allowlist, and extends the approval
+ * rule A-1 and the prohibition P-1 to cross-chain purchases. Everything else is kept.
+ */
+export function withCrosschain(current: PolicyDocument, params: { agentId: string; vendorId: string; chainId: number; token: string; evmVendor: string; sku?: string; minPriceUnits?: string }): PolicyDocument {
+  const next: PolicyDocument = structuredClone(current);
+  next.version = current.version + 1;
+  const r = next.rules;
+  const tools = r.agent_permissions[params.agentId] ?? [];
+  if (!tools.includes("request_crosschain_purchase")) tools.push("request_crosschain_purchase");
+  r.agent_permissions[params.agentId] = tools;
+  if (!r.procurement.approved_vendor_ids.includes(params.vendorId)) r.procurement.approved_vendor_ids.push(params.vendorId);
+  if (params.sku && params.minPriceUnits) r.pricing.min_price_units[params.sku] = params.minPriceUnits;
+  r.crosschain = { chain_id: params.chainId, token: params.token.toLowerCase(), approved_vendors: [params.evmVendor.toLowerCase()] };
+  for (const rule of [...r.approvals, ...r.prohibitions]) {
+    if (rule.when.tools?.includes("request_purchase") && !rule.when.tools.includes("request_crosschain_purchase")) rule.when.tools.push("request_crosschain_purchase");
+  }
+  return next;
+}

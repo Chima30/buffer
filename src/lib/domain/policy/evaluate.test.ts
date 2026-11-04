@@ -139,3 +139,45 @@ describe("policy hash", () => {
     expect(() => assertPolicyAnchored(policy, null)).toThrow();
   });
 });
+
+describe("cross-chain purchases (policy v3)", async () => {
+  const { withCrosschain } = await import("./defaults");
+  const SEPOLIA_USDC = "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238";
+  const EVM_VENDOR = "0x8fcf5415cc8c338d4523be5a04bb758b5437810f";
+  const v3 = withCrosschain(policy, { agentId: "agent-1", vendorId: "vendor-evm", chainId: 11155111, token: SEPOLIA_USDC, evmVendor: EVM_VENDOR });
+  const x = (over: Partial<ProposedAction> = {}): ProposedAction => ({
+    tool: "request_crosschain_purchase",
+    agentId: "agent-1",
+    orderId: "o-1",
+    amountUnits: toUnits("12"),
+    tokenId: SEPOLIA_USDC,
+    destination: "0x8FCF5415CC8c338D4523Be5a04bb758B5437810f",
+    vendorId: "vendor-evm",
+    ...over,
+  });
+
+  it("v2 hash is unchanged by the optional schema field", () => {
+    expect(policyDocumentSchema.parse(policy)).toEqual(policy);
+  });
+  it("needs approval above 10 USDC, like NEAR purchases", () => {
+    const d = evaluate(v3, x(), ctx);
+    expect(d.outcome).toBe("needs_approval");
+    expect(d.reasons.map((r) => r.ruleId)).toContain("A-1");
+  });
+  it("allows a small purchase to the approved address (any case)", () => {
+    expect(evaluate(v3, x({ amountUnits: toUnits("5") }), ctx).outcome).toBe("allow");
+  });
+  it("blocks an attacker address absolutely", () => {
+    const d = evaluate(v3, x({ destination: "0x00000000000000000000000000000000000000ee" }), ctx);
+    expect(d).toMatchObject({ outcome: "deny", absolute: true });
+  });
+  it("blocks the NEAR token for a cross-chain purchase", () => {
+    expect(evaluate(v3, x({ tokenId: TOKEN }), ctx).reasons[0].code).toBe("TOKEN_NOT_ALLOWED");
+  });
+  it("is not permitted under v2", () => {
+    expect(evaluate(policy, x(), ctx).reasons[0].code).toBe("TOOL_NOT_PERMITTED");
+  });
+  it("hashes differently from v2", () => {
+    expect(policyHash(v3)).not.toBe(policyHash(policy));
+  });
+});

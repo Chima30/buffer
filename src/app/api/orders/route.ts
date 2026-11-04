@@ -5,7 +5,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
-import { loadBusiness } from "@/lib/server/business";
+import { loadBusiness, scopeFor } from "@/lib/server/business";
 import { db, must } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
 import { fail, hashToken, json, newToken } from "@/lib/server/http";
@@ -18,14 +18,19 @@ const body = z.object({
     .regex(/^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/, "Not a valid NEAR account id")
     .max(64)
     .optional(),
+  /** Which product to buy; defaults to the Weekly Market Brief. */
+  sku: z.string().trim().max(64).optional(),
 });
 
 export async function POST(req: Request) {
   const parsed = body.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) return fail(400, parsed.error.issues[0]?.message ?? "Invalid request");
 
-  const ctx = await loadBusiness();
-  if (ctx.business.status !== "active") return fail(409, "The business is paused and not taking orders");
+  const base = await loadBusiness();
+  if (base.business.status !== "active") return fail(409, "The business is paused and not taking orders");
+  const chosen = parsed.data.sku ? base.products.find((p) => p.sku === parsed.data.sku) : base.product;
+  if (!chosen) return fail(404, "No such product");
+  const ctx = { ...base, ...scopeFor(base, chosen.id) };
 
   const near = nearConfig();
   const onchainOrderId = `o-${randomBytes(6).toString("hex")}`;

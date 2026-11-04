@@ -9,13 +9,13 @@ import { json, tokenMatches } from "@/lib/server/http";
 export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
   const { id } = await ctx.params;
   const token = new URL(req.url).searchParams.get("token");
-  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,created_at,updated_at,failure_reason").eq("id", id).single(), "order");
+  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,created_at,updated_at,failure_reason,products(sku,title)").eq("id", id).single(), "order");
   const authorised = tokenMatches(token, order.access_token_hash);
 
   const [transitions, ledger, approval] = await Promise.all([
     db().from("order_transitions").select("from_state,to_state,reason,at").eq("order_id", id).order("at"),
     db().from("ledger_entries").select("order_id,event_type,status,amount_units,counterparty,tx_hash,explorer_url,details,at").eq("order_id", id).order("at"),
-    db().from("procurements").select("status,amount_units,onchain_index").eq("order_id", id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    db().from("procurements").select("status,amount_units,onchain_index,chain,evm_tx_hash").eq("order_id", id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
   ]);
 
   let report: unknown = null;
@@ -32,7 +32,8 @@ export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
     onchainOrderId: order.onchain_order_id,
     contractId: nearConfig().contractId,
     tokenContract: nearConfig().usdcTokenId,
-    sku: "weekly-market-brief",
+    sku: (order.products as { sku: string } | null)?.sku ?? "weekly-market-brief",
+    productTitle: (order.products as { title: string } | null)?.title ?? "Weekly Market Brief",
     state: order.state,
     priceUnits: order.price_units,
     createdAt: order.created_at,

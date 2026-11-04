@@ -26,6 +26,9 @@ export function outlayer(): OutlayerClient {
 
 const CALL_GAS = "50000000000000"; // 50 TGas: request_purchase / mark_fulfilled
 const SETTLE_GAS = "300000000000000"; // 300 TGas: settle fans out several ft_transfer promises
+const EVM_GAS = "200000000000000"; // 200 TGas: request_evm_purchase -> MPC sign (50) -> callback (10)
+
+export type AgentMethod = "request_purchase" | "request_evm_purchase" | "mark_fulfilled" | "settle" | "retry_leg";
 
 export async function agentAddress(): Promise<string> {
   const r = await outlayer().getAddress("near");
@@ -39,7 +42,7 @@ export async function agentAddress(): Promise<string> {
  */
 export async function callContract(params: {
   contractId: string;
-  method: "request_purchase" | "mark_fulfilled" | "settle" | "retry_leg";
+  method: AgentMethod;
   args: Record<string, unknown>;
   idempotencyKey: string;
 }): Promise<CallResponse> {
@@ -47,7 +50,7 @@ export async function callContract(params: {
     receiver_id: params.contractId,
     method_name: params.method,
     args: params.args,
-    gas: params.method === "settle" || params.method === "retry_leg" ? SETTLE_GAS : CALL_GAS,
+    gas: params.method === "settle" || params.method === "retry_leg" ? SETTLE_GAS : params.method === "request_evm_purchase" ? EVM_GAS : CALL_GAS,
     deposit: "0",
     idempotencyKey: params.idempotencyKey,
   });

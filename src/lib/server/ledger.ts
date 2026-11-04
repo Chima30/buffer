@@ -16,6 +16,10 @@ export interface LedgerWrite {
   txHash?: string | null;
   verifiedOnChain?: boolean;
   details?: Record<string, unknown>;
+  /** Explorer link for transactions on another chain (defaults to NEAR testnet). */
+  explorerUrl?: string;
+  /** Token for the amount when it is not NEAR USDC. */
+  tokenId?: string;
 }
 
 export async function writeLedger(e: LedgerWrite): Promise<void> {
@@ -29,10 +33,10 @@ export async function writeLedger(e: LedgerWrite): Promise<void> {
       event_type: e.eventType,
       status: e.status,
       amount_units: e.amountUnits === undefined || e.amountUnits === null ? null : e.amountUnits.toString(),
-      token_id: e.amountUnits === undefined || e.amountUnits === null ? null : cfg.usdcTokenId,
+      token_id: e.amountUnits === undefined || e.amountUnits === null ? null : (e.tokenId ?? cfg.usdcTokenId),
       counterparty: e.counterparty ?? null,
       tx_hash: e.txHash ?? null,
-      explorer_url: e.txHash ? cfg.explorerTxUrl(e.txHash) : null,
+      explorer_url: e.txHash ? (e.explorerUrl ?? cfg.explorerTxUrl(e.txHash)) : null,
       details: e.details ?? {},
     });
   if (error) throw new Error(`ledger insert failed: ${error.message}`);

@@ -12,12 +12,14 @@ import { assertTransition, type OrderState } from "@/lib/domain/order-machine";
 import { evaluate } from "@/lib/domain/policy/evaluate";
 import { formatUnits } from "@/lib/domain/money";
 import { computeSettlement, type ExpenseInput } from "@/lib/domain/revenue";
-import { HaltError, evaluationContext, loadBusinessAnchored, type BusinessContext } from "../business";
+import { HaltError, evaluationContext, loadBusinessAnchored, scopeFor, type BusinessContext } from "../business";
 import { getOrder } from "../contract";
 import { db, must } from "../db";
-import { nearConfig } from "../env";
+import { nearConfig, sepoliaConfig } from "../env";
+import { assembleSigned, broadcast, getEvmConfig, getEvmPurchases, offerFees, treasury, verifyUsdcTransfer } from "../evm";
+import { viewFunction } from "../near-rpc";
 import { audit, writeLedger } from "../ledger";
-import { deliverDataset } from "../vendor";
+import { deliverDataset, deliverEvmDataset } from "../vendor";
 import { recordAction } from "./actions";
 import { execContractCall } from "./execute";
 import { PolicyDenied, runInference } from "./inference";
@@ -32,6 +34,7 @@ interface OrderRow {
   brief: string;
   price_units: string;
   onchain_order_id: string;
+  product_id: string;
   plan: Plan | null;
 }
 
@@ -40,7 +43,7 @@ type StepResult = { next?: Step; delaySec?: number; repeat?: boolean };
 // ---------- helpers ----------
 
 async function loadOrder(id: string): Promise<OrderRow> {
-  return must(await db().from("orders").select("id,business_id,state,brief,price_units,onchain_order_id,plan").eq("id", id).single(), "order");
+  return must(await db().from("orders").select("id,business_id,state,brief,price_units,onchain_order_id,product_id,plan").eq("id", id).single(), "order");
 }
 
 export async function transition(order: OrderRow, to: OrderState, reason: string): Promise<void> {
@@ -81,7 +84,7 @@ async function stepPlan(order: OrderRow, ctx: BusinessContext): Promise<StepResu
     purpose: "plan",
     messages: planMessages(order.brief, ctx.product.title, {
       name: ctx.vendor.name,
-      description: "Reference notes on NEAR agent infrastructure (Intents, Chain Signatures, NEAR AI Cloud, OutLayer, NEP-141).",
+      description: ctx.vendor.description ?? "Reference notes on NEAR agent infrastructure (Intents, Chain Signatures, NEAR AI Cloud, OutLayer, NEP-141).",
       priceUsdc: formatUnits(BigInt(ctx.vendor.unit_price_units)),
     }),
     maxTokens: 1200,
@@ -102,6 +105,7 @@ async function stepPlan(order: OrderRow, ctx: BusinessContext): Promise<StepResu
 }
 
 async function stepProcure(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
+  if (ctx.vendor.chain === "sepolia") return stepProcureEvm(order, ctx);
   const { usdcTokenId } = nearConfig();
   const amount = BigInt(ctx.vendor.unit_price_units);
   const action = {
@@ -110,7 +114,7 @@ async function stepProcure(order: OrderRow, ctx: BusinessContext): Promise<StepR
     orderId: order.id,
     amountUnits: amount,
     tokenId: usdcTokenId,
-    destination: ctx.vendor.near_account,
+    destination: ctx.vendor.near_account ?? undefined,
     vendorId: ctx.vendor.id,
   };
   const key = `${order.id}:purchase:1`;
@@ -170,7 +174,8 @@ async function stepProcure(order: OrderRow, ctx: BusinessContext): Promise<StepR
 }
 
 async function stepAwaitPurchase(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
-  const proc = must(await db().from("procurements").select("id,status,onchain_index,amount_units").eq("order_id", order.id).order("created_at", { ascending: false }).limit(1).single(), "procurement");
+  const proc = must(await db().from("procurements").select("id,status,onchain_index,amount_units,chain").eq("order_id", order.id).order("created_at", { ascending: false }).limit(1).single(), "procurement");
+  if (proc.chain === "sepolia") return stepAwaitEvm(order, ctx, proc);
   const onchain = await getOrder(order.onchain_order_id);
   const p = onchain?.purchases[proc.onchain_index ?? 0];
   if (!p) throw new Error("Purchase not found on-chain");
@@ -192,11 +197,106 @@ async function stepAwaitPurchase(order: OrderRow, ctx: BusinessContext): Promise
   return { next: "draft" };
 }
 
+// ---------- cross-chain purchase (Chain Signatures, Ethereum Sepolia) ----------
+
+const evmApproveCommand = (orderId: string, index: number) =>
+  `near --% contract call-function as-transaction ${nearConfig().contractId} approve_evm_purchase json-args "{\\"order_id\\":\\"${orderId}\\",\\"index\\":${index}}" prepaid-gas "150 Tgas" attached-deposit "0 NEAR" sign-as ${nearConfig().ownerAccountId} network-config testnet sign-with-keychain send`;
+
+async function stepProcureEvm(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
+  const cfg = await getEvmConfig();
+  if (!cfg) throw new HaltError("Cross-chain purchases are not configured on the contract");
+  const vendorAddress = ctx.vendor.evm_address;
+  if (!vendorAddress) throw new Error("Cross-chain vendor has no address");
+  const amount = BigInt(ctx.vendor.unit_price_units);
+  const action = { tool: "request_crosschain_purchase" as const, agentId: ctx.agent.id, orderId: order.id, amountUnits: amount, tokenId: cfg.usdc, destination: vendorAddress, vendorId: ctx.vendor.id };
+  const key = `${order.id}:evm-purchase:1`;
+  const decision = evaluate(ctx.policy, action, await evaluationContext(ctx));
+  await recordAction({ agentId: ctx.agent.id, orderId: order.id, tool: action.tool, args: action, decision, idempotencyKey: key });
+  if (decision.outcome === "deny") {
+    await writeLedger({ businessId: order.business_id, orderId: order.id, eventType: "purchase_blocked", status: "FAILED", amountUnits: amount, counterparty: vendorAddress, details: { chain: "sepolia", reasons: decision.reasons } });
+    await transition(order, "DRAFTING", `cross-chain purchase blocked: ${decision.reasons[0]?.code}`);
+    return { next: "draft" };
+  }
+
+  const existing = await db().from("procurements").select("id,onchain_index").eq("idempotency_key", key).maybeSingle();
+  if (existing.data && existing.data.onchain_index !== null) return { next: "await_purchase" };
+  const proc: { id: string } =
+    existing.data ?? must(await db().from("procurements").insert({ order_id: order.id, vendor_id: ctx.vendor.id, amount_units: amount.toString(), status: "proposed", idempotency_key: key, chain: "sepolia" }).select("id").single(), "insert procurement");
+
+  const fees = await offerFees(BigInt(cfg.max_fee_per_gas_cap));
+  const res = await execContractCall({
+    method: "request_evm_purchase",
+    args: { order_id: order.onchain_order_id, vendor: vendorAddress, amount: amount.toString(), max_fee_per_gas: fees.maxFeePerGas.toString(), max_priority_fee_per_gas: fees.maxPriorityFeePerGas.toString() },
+    idempotencyKey: key,
+    agentAccount: ctx.agent.near_account,
+    maxWaitMs: 90_000,
+  });
+  if (res.state === "PENDING") return { repeat: true, delaySec: 15 };
+  if (res.state === "FAILED") {
+    await db().from("procurements").update({ status: "failed" }).eq("id", proc.id);
+    await writeLedger({ businessId: order.business_id, orderId: order.id, eventType: "purchase_failed", status: "FAILED", amountUnits: amount, counterparty: vendorAddress, details: { chain: "sepolia", reason: res.reason } });
+    await transition(order, "DRAFTING", "cross-chain purchase request failed");
+    return { next: "draft" };
+  }
+  const ev = res.events.find((e) => e.event === "evm_purchase_awaiting_approval" || e.event === "evm_purchase_requested");
+  const index = Number(ev?.data.index ?? 0);
+  const awaiting = ev?.event === "evm_purchase_awaiting_approval";
+  await db().from("procurements").update({ onchain_index: index, status: awaiting ? "awaiting_approval" : "submitted", tx_hash: res.txHash }).eq("id", proc.id);
+  if (awaiting) {
+    await writeLedger({ businessId: order.business_id, orderId: order.id, eventType: "purchase_awaiting_approval", status: "PENDING", amountUnits: amount, counterparty: vendorAddress, details: { chain: "sepolia", request_tx: res.txHash, index } });
+    await notifyOwner(order.business_id, "purchase_approval", { order: order.onchain_order_id, index, chain: "sepolia", vendor: vendorAddress, amount: formatUnits(amount), approve_command: evmApproveCommand(order.onchain_order_id, index) });
+    await transition(order, "AWAITING_APPROVAL", `cross-chain purchase of ${formatUnits(amount)} USDC needs owner approval`);
+  }
+  return { next: "await_purchase", delaySec: 10 };
+}
+
+async function stepAwaitEvm(order: OrderRow, ctx: BusinessContext, proc: { id: string; status: string; onchain_index: number | null; amount_units: string }): Promise<StepResult> {
+  const list = await getEvmPurchases(order.onchain_order_id);
+  const p = list[proc.onchain_index ?? 0];
+  if (!p) throw new Error("Cross-chain purchase not found on-chain");
+  if (p.status === "AwaitingApproval" || p.status === "Signing") return { repeat: true, delaySec: p.status === "Signing" ? 5 : 15 };
+
+  if (p.status === "Signed") {
+    const from = await treasury();
+    const unsigned = await viewFunction<string | null>(nearConfig().contractId, "get_evm_unsigned_tx", { order_id: order.onchain_order_id, index: proc.onchain_index ?? 0 });
+    if (!unsigned) throw new Error("Contract returned no unsigned transaction");
+    const { raw, hash } = await assembleSigned(unsigned, p, from);
+    if (proc.status !== "confirmed") {
+      await db().from("procurements").update({ evm_tx_hash: hash, evm_nonce: p.nonce, status: "submitted" }).eq("id", proc.id);
+      await broadcast(raw, hash);
+    }
+    const check = await verifyUsdcTransfer(hash, { token: p.token, from, to: p.vendor, amount: BigInt(p.amount) });
+    if (check.state === "PENDING") return { repeat: true, delaySec: 10 };
+    if (check.state === "FAILED") {
+      // Signed and counted as spent by the contract, but not paid: the owner is told; no retry with new bytes.
+      await db().from("procurements").update({ status: "failed" }).eq("id", proc.id);
+      await writeLedger({ businessId: order.business_id, orderId: order.id, eventType: "purchase_failed", status: "FAILED", amountUnits: BigInt(p.amount), counterparty: p.vendor, details: { chain: "sepolia", reason: check.reason, evm_tx: hash } });
+      await notifyOwner(order.business_id, "crosschain_payment_failed", { order: order.onchain_order_id, evm_tx: hash, reason: check.reason });
+      await transition(order, "DRAFTING", "cross-chain payment did not land; drafting without dataset");
+      return { next: "draft" };
+    }
+    if (proc.status !== "confirmed") {
+      await db().from("procurements").update({ status: "confirmed" }).eq("id", proc.id);
+      await writeLedger({ businessId: order.business_id, orderId: order.id, eventType: "vendor_paid", status: "REAL", amountUnits: BigInt(p.amount), tokenId: p.token, counterparty: p.vendor, txHash: hash, verifiedOnChain: true, explorerUrl: sepoliaConfig().explorerTxUrl(hash), details: { chain: "sepolia", from, nonce: p.nonce, block: check.blockNumber.toString(), signed_by: "NEAR Chain Signatures (MPC)" } });
+      await db().from("expenses").upsert({ order_id: order.id, category: "supplier", amount_units: p.amount, status: "PAID", evidence_ref: `sepolia:${hash}`, reimburse_to: "owner" }, { onConflict: "order_id,evidence_ref" });
+    }
+    if (order.state === "AWAITING_APPROVAL" || order.state === "PROCURING") await transition(order, "DRAFTING", "vendor paid on Ethereum Sepolia via Chain Signatures");
+    return { next: "draft" };
+  }
+  await db().from("procurements").update({ status: p.status === "Rejected" ? "rejected" : "failed" }).eq("id", proc.id);
+  await writeLedger({ businessId: order.business_id, orderId: order.id, eventType: p.status === "Rejected" ? "purchase_rejected" : "purchase_failed", status: "FAILED", amountUnits: BigInt(proc.amount_units), counterparty: p.vendor, details: { chain: "sepolia" } });
+  await transition(order, "DRAFTING", `cross-chain purchase ${p.status.toLowerCase()}; drafting without dataset`);
+  return { next: "draft" };
+}
+
 async function stepDraft(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
-  const proc = await db().from("procurements").select("status,onchain_index").eq("order_id", order.id).eq("status", "confirmed").maybeSingle();
+  const proc = await db().from("procurements").select("status,onchain_index,chain,evm_tx_hash,amount_units").eq("order_id", order.id).eq("status", "confirmed").maybeSingle();
   let dataset: unknown = null;
   if (proc.data) {
-    const d = await deliverDataset(order.onchain_order_id, proc.data.onchain_index ?? 0);
+    const d =
+      proc.data.chain === "sepolia"
+        ? await deliverEvmDataset(order.onchain_order_id, proc.data.onchain_index ?? 0, proc.data.evm_tx_hash)
+        : await deliverDataset(order.onchain_order_id, proc.data.onchain_index ?? 0);
     if (d.ok) dataset = d.dataset;
   }
   const out = await runInference({
@@ -244,8 +344,10 @@ async function stepSettle(order: OrderRow, ctx: BusinessContext, attempt: number
 
   const calls = must<{ id: string; chat_id: string; cost_usd_micros: string }[]>(await db().from("inference_calls").select("id,chat_id,cost_usd_micros").eq("order_id", order.id), "inference calls");
   const vendorPaid = onchain.purchases.filter((p) => p.status === "Paid");
+  const evmSigned = (await getEvmPurchases(order.onchain_order_id).catch(() => [])).filter((p) => p.status === "Signed");
   const expenses: ExpenseInput[] = [
     ...vendorPaid.map((p, i) => ({ id: `vendor-${i}`, category: "supplier" as const, amount: BigInt(p.amount), status: "PAID" as const, evidenceRef: `onchain-purchase-${i}` })),
+    ...evmSigned.map((p, i) => ({ id: `evm-${i}`, category: "treasury" as const, amount: BigInt(p.amount), status: "PAID" as const, evidenceRef: `evm-nonce-${p.nonce}` })),
     ...calls.map((c) => ({ id: c.id, category: "inference" as const, amount: BigInt(c.cost_usd_micros), status: "METERED" as const, evidenceRef: `chat:${c.chat_id}` })),
   ];
   // Off-chain preview with the same formula the contract runs; used for reconciliation.
@@ -359,7 +461,9 @@ interface JobRow {
 async function runJob(job: JobRow): Promise<void> {
   const order = await loadOrder(job.order_id);
   try {
-    const ctx = await loadBusinessAnchored();
+    const base = await loadBusinessAnchored();
+    // Each order works with its own product and that product's vendor.
+    const ctx: BusinessContext = { ...base, ...scopeFor(base, order.product_id) };
     const result = await STEPS[job.step](order, ctx, job.attempts);
     if (result.repeat) {
       await db().from("jobs").update({ status: "queued", run_after: new Date(Date.now() + (result.delaySec ?? 10) * 1000).toISOString(), lease_until: null, attempts: Math.max(0, job.attempts - 1) }).eq("id", job.id);

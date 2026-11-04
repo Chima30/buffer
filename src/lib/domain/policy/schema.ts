@@ -20,11 +20,14 @@ export const TOOL_NAMES = [
   "get_vendor_catalog",
   "run_inference",
   "request_purchase",
+  "request_crosschain_purchase",
   "deliver_report",
   "request_settlement",
 ] as const;
 export const toolName = z.enum(TOOL_NAMES);
 export type ToolName = z.infer<typeof toolName>;
+
+const evmAddress = z.string().regex(/^0x[0-9a-f]{40}$/, "must be a lowercase 0x address");
 
 const matchCondition = z
   .object({
@@ -60,6 +63,16 @@ export const policyRulesSchema = z
       })
       .strict(),
     destinations: z.object({ allowlist: z.array(nearAccount) }).strict(),
+    /** Optional: purchases on another chain through Chain Signatures (policy v3+). */
+    crosschain: z
+      .object({
+        chain_id: z.number().int().positive(),
+        /** The token cross-chain purchases pay in (USDC on that chain). */
+        token: evmAddress,
+        approved_vendors: z.array(evmAddress),
+      })
+      .strict()
+      .optional(),
     pricing: z.object({ min_price_units: z.record(z.string(), unitsString) }).strict(),
     revenue: z
       .object({

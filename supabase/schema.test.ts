@@ -15,7 +15,9 @@ const sql =
   "\n" +
   readFileSync(new URL("./migrations/20261104000000_security.sql", import.meta.url), "utf8") +
   "\n" +
-  readFileSync(new URL("./migrations/20261104010000_gpu_attestation.sql", import.meta.url), "utf8");
+  readFileSync(new URL("./migrations/20261104010000_gpu_attestation.sql", import.meta.url), "utf8") +
+  "\n" +
+  readFileSync(new URL("./migrations/20261104020000_crosschain.sql", import.meta.url), "utf8");
 
 let db: PGlite;
 let biz: string;

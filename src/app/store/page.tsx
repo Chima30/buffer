@@ -1,11 +1,19 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { SiteHeader } from "@/components/site-header";
+
+interface Product { sku: string; title: string; description: string | null; priceUnits: string; vendor: { name: string; chain: "near" | "sepolia" } }
 
 export default function StorePage() {
   const router = useRouter();
+  const [products, setProducts] = useState<Product[]>([]);
+  const [sku, setSku] = useState("weekly-market-brief");
+  useEffect(() => {
+    fetch("/api/products").then((r) => r.json()).then((j) => setProducts(j.products ?? [])).catch(() => setProducts([]));
+  }, []);
+  const selected = products.find((p) => p.sku === sku);
   const [brief, setBrief] = useState("");
   const [account, setAccount] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +27,7 @@ export default function StorePage() {
       const res = await fetch("/api/orders", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brief, customerAccount: account.trim() || undefined }),
+        body: JSON.stringify({ brief, sku, customerAccount: account.trim() || undefined }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Could not create the order");
@@ -37,7 +45,7 @@ export default function StorePage() {
       <SiteHeader />
       <section className="mt-12">
         <p className="font-mono text-xs uppercase tracking-wider text-ink-3">Verified Research Desk</p>
-        <h1 className="mt-2 text-3xl font-semibold tracking-tight">Weekly Market Brief</h1>
+        <h1 className="mt-2 text-3xl font-semibold tracking-tight">{selected?.title ?? "Weekly Market Brief"}</h1>
         <p className="mt-3 text-ink-2">
           A short, sourced research brief on the topic you choose. An AI agent plans it, may buy a dataset from an approved
           vendor, writes it with private inference on NEAR AI Cloud, and signs off with a verifiable proof.
@@ -48,6 +56,22 @@ export default function StorePage() {
           <div className="bg-surface p-3"><dt className="text-ink-3">Delivery</dt><dd className="mt-0.5">A few minutes</dd></div>
         </dl>
       </section>
+
+      {products.length > 1 && (
+        <fieldset className="mt-6 grid gap-3 sm:grid-cols-2">
+          <legend className="sr-only">Choose a product</legend>
+          {products.map((p) => (
+            <label key={p.sku} className={`cursor-pointer rounded-[var(--radius-card)] border p-4 text-sm ${p.sku === sku ? "border-accent bg-accent-soft" : "border-rule bg-surface"}`}>
+              <input type="radio" name="sku" value={p.sku} checked={p.sku === sku} onChange={() => setSku(p.sku)} className="sr-only" />
+              <span className="font-medium">{p.title}</span>
+              <span className="mt-1 block text-xs text-ink-2">{p.description}</span>
+              <span className="mt-2 block text-xs text-ink-3">
+                Dataset vendor paid {p.vendor.chain === "sepolia" ? "on Ethereum Sepolia via NEAR Chain Signatures" : "on NEAR by the business contract"}
+              </span>
+            </label>
+          ))}
+        </fieldset>
+      )}
 
       <form onSubmit={submit} className="mt-8 space-y-5 rounded-[var(--radius-card)] border border-rule bg-surface p-5">
         <label className="block">

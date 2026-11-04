@@ -5,7 +5,7 @@
 import { bufferEventsFromTx, type BufferEvent } from "../contract";
 import { nearConfig } from "../env";
 import type { CallResponse } from "@outlayer/sdk";
-import { callContract, requestStatus } from "../outlayer";
+import { callContract, requestStatus, type AgentMethod } from "../outlayer";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -15,7 +15,7 @@ export type ExecResult =
   | { state: "PENDING"; requestId: string };
 
 export async function execContractCall(params: {
-  method: "request_purchase" | "mark_fulfilled" | "settle" | "retry_leg";
+  method: AgentMethod;
   args: Record<string, unknown>;
   idempotencyKey: string;
   agentAccount: string;

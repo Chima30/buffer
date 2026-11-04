@@ -53,6 +53,21 @@ export function nearConfig() {
   };
 }
 
+/** Ethereum Sepolia side of Chain Signatures. Testnet only, all values have safe defaults. */
+export function sepoliaConfig() {
+  const cfg = read("Sepolia", {
+    SEPOLIA_RPC_URL: z.url().default("https://ethereum-sepolia-rpc.publicnode.com"),
+    MPC_CONTRACT_ID: z.string().default("v1.signer-prod.testnet"),
+  });
+  return {
+    rpcUrl: cfg.SEPOLIA_RPC_URL,
+    mpcContract: cfg.MPC_CONTRACT_ID,
+    chainId: 11155111,
+    explorerTxUrl: (hash: string) => `https://sepolia.etherscan.io/tx/${hash}`,
+    explorerAddressUrl: (address: string) => `https://sepolia.etherscan.io/address/${address}`,
+  };
+}
+
 export function nearAiConfig() {
   const cfg = read("NEAR AI Cloud", {
     NEARAI_API_BASE: z.url().default("https://cloud-api.near.ai/v1"),
