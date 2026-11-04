@@ -16,12 +16,22 @@ import { treasuryBalances } from "@/lib/server/evm";
 import { nearBalance } from "@/lib/server/near-rpc";
 import { sepoliaConfig } from "@/lib/server/env";
 import { nearConfig } from "@/lib/server/env";
-import { json } from "@/lib/server/http";
+import { fail, json } from "@/lib/server/http";
 
 const sum = (rows: { v: string | null }[] | null) => (rows ?? []).reduce((a, r) => a + BigInt(r.v ?? 0), 0n);
 
 export async function GET() {
   await connection(); // live data: never prerender at build time
+  try {
+    return await overview();
+  } catch (e) {
+    // Say what failed instead of an empty 500.
+    console.error("owner overview failed", e);
+    return fail(500, `Owner overview failed: ${(e as Error).message}`.slice(0, 400));
+  }
+}
+
+async function overview() {
   const near = nearConfig();
   // Catch up if the owner anchored a draft since the last view.
   const biz0 = await db().from("businesses").select("id").eq("contract_id", near.contractId).maybeSingle();

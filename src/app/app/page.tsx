@@ -71,7 +71,8 @@ export default function OwnerConsole() {
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/owner/overview", { cache: "no-store" });
-      const j = await res.json();
+      const text = await res.text();
+      const j = text ? JSON.parse(text) : { error: `The server returned an empty response (HTTP ${res.status})` };
       if (!res.ok) throw new Error(j.error ?? "Could not load");
       setData(j);
       setError(null);
