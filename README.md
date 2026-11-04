@@ -128,6 +128,18 @@ near contract call-function as-read-only buffer-john-desk.testnet get_order json
 - One business and one agent run today. `/new` produces the plan for another business but does not deploy it.
 - Owner actions are signed with near-cli or a NEAR wallet. The console shows the exact command for each.
 
+## Built during the hackathon
+
+Every commit is from the hackathon window: the repository starts on 2026-11-03 with `create-next-app`. There is no earlier code and no product on another chain.
+
+Libraries and tools:
+- **Contract:** `near-sdk` (Rust), plus `near-sandbox` and `cargo-near` in tests.
+- **App:** Next.js, React, Tailwind CSS, Supabase (`@supabase/supabase-js`), `zod`, `viem` (Ethereum transactions and signature recovery), `jose` (NVIDIA token verification), `bs58`, `react-markdown`, `geist` fonts.
+- **NEAR:** `near-api-js`, `@hot-labs/near-connect` and `near-connect-hooks` (wallet), `@outlayer/sdk` (agent custody).
+- **Tests:** `vitest` and PGlite (an in-memory Postgres for the schema tests).
+
+Much of the code was written with an AI coding assistant (Claude, by Anthropic), directed and reviewed by the team.
+
 ## License
 
 MIT
