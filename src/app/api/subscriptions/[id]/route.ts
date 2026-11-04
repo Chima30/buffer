@@ -7,6 +7,7 @@ import { getSubscription } from "@/lib/server/contract";
 import { db, must } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
 import { json, tokenMatches } from "@/lib/server/http";
+import { sessionFrom } from "@/lib/server/wallet-auth";
 import { reconcile, type SubscriptionRow } from "@/lib/server/subscriptions";
 
 export async function GET(req: Request, ctx: RouteContext<"/api/subscriptions/[id]">) {
@@ -17,7 +18,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/subscriptions/[i
     await db().from("subscriptions").select("id,business_id,product_id,topic,customer_account,state,issues_total,issues_started,issue_price_units,onchain_subscription_id,access_token_hash,next_due_at,refund_units,refund_status,created_at,products(sku,title)").eq("id", id).single(),
     "subscription",
   );
-  const authorised = tokenMatches(token, row.access_token_hash);
+  const authorised = tokenMatches(token, row.access_token_hash) || (!!row.customer_account && (await sessionFrom(req)) === row.customer_account);
   const chain = row.state === "AWAITING_PAYMENT" ? null : await getSubscription(row.onchain_subscription_id);
   const sub = chain ? await reconcile(row, chain) : row;
   const issues = must<{ id: string; issue_number: number; state: string; onchain_order_id: string; plan: { title?: string } | null; created_at: string }[]>(

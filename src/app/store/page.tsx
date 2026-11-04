@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { cadence } from "@/lib/domain/cadence";
+import { rememberLocal } from "@/lib/client/session";
 
 interface Product { sku: string; title: string; description: string | null; priceUnits: string; vendor: { name: string; chain: "near" | "sepolia" } }
 interface Plan { sku: string; title: string; description: string | null; issuePriceUnits: string; intervalSeconds: number; minIssues: number; maxIssues: number }
@@ -13,6 +14,7 @@ export default function StorePage() {
   const router = useRouter();
   const [products, setProducts] = useState<Product[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [sku, setSku] = useState("weekly-market-brief");
   useEffect(() => {
     fetch("/api/products")
@@ -21,7 +23,8 @@ export default function StorePage() {
         setProducts(j.products ?? []);
         setPlans(j.subscriptions ?? []);
       })
-      .catch(() => setProducts([]));
+      .catch(() => setProducts([]))
+      .finally(() => setLoaded(true));
   }, []);
   const selected = products.find((p) => p.sku === sku);
   const plan = plans.find((p) => p.sku === sku);
@@ -46,6 +49,7 @@ export default function StorePage() {
         });
         const j = await res.json();
         if (!res.ok) throw new Error(j.error ?? "Could not create the subscription");
+        rememberLocal({ kind: "subscription", id: j.subscriptionId, token: j.accessToken, title: `${plan.title}: ${brief.slice(0, 60)}` });
         router.push(`/subscriptions/${j.subscriptionId}#t=${j.accessToken}`);
         return;
       }
@@ -56,6 +60,7 @@ export default function StorePage() {
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Could not create the order");
+      rememberLocal({ kind: "order", id: j.orderId, token: j.accessToken, title: brief.slice(0, 80) });
       // The access token stays in the URL fragment, which is never sent to the server.
       router.push(`/orders/${j.orderId}#t=${j.accessToken}`);
     } catch (err) {
@@ -75,7 +80,8 @@ export default function StorePage() {
 
         <fieldset className="mt-6 space-y-3">
           <legend className="sr-only">Choose a product</legend>
-          {(products.length ? products : [{ sku: "weekly-market-brief", title: "Weekly Market Brief", description: "A short, sourced research brief on the topic you choose.", priceUnits: "20000000", vendor: { name: "", chain: "near" as const } }]).map((p) => {
+          {!loaded && <p className="rounded-[var(--radius-card)] border border-rule bg-surface p-4 text-sm text-ink-3">Loading products…</p>}
+          {(products.length || !loaded ? products : [{ sku: "weekly-market-brief", title: "Weekly Market Brief", description: "A short, sourced research brief on the topic you choose.", priceUnits: "20000000", vendor: { name: "", chain: "near" as const } }]).map((p) => {
             const on = p.sku === sku;
             return (
               <label key={p.sku} className={`flex cursor-pointer gap-3 rounded-[var(--radius-card)] border bg-surface p-4 transition-colors duration-150 ${on ? "border-ink/30 shadow-[var(--highlight)]" : "border-rule hover:bg-raised"}`}>

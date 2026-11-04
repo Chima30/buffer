@@ -1,6 +1,6 @@
 "use client";
 
-import { BookText, Menu, PlusSquare, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
+import { BookText, Menu, PlusSquare, ShieldCheck, ShoppingBag, SlidersHorizontal, X, History } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, useState } from "react";
@@ -10,6 +10,7 @@ import { WalletButton } from "./wallet";
 const NAV = [
   { href: "/new", label: "Start", icon: PlusSquare },
   { href: "/store", label: "Store", icon: ShoppingBag },
+  { href: "/me", label: "My orders", icon: History },
   { href: "/ledger", label: "Ledger", icon: BookText },
   { href: "/security", label: "Security", icon: ShieldCheck },
   { href: "/app", label: "Owner", icon: SlidersHorizontal },
@@ -35,7 +36,7 @@ function NavList({ active, onNavigate }: { active: string | null; onNavigate?: (
   return (
     <ul className="space-y-1">
       {NAV.map(({ href, label, icon: Icon }) => {
-        const on = active === href || (href === "/store" && active?.startsWith("/orders"));
+        const on = active === href || (href === "/store" && (active?.startsWith("/orders") || active?.startsWith("/subscriptions")));
         return (
           <li key={href}>
             <Link

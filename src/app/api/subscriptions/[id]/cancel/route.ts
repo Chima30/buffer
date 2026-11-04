@@ -11,9 +11,10 @@ import { rateLimit } from "@/lib/server/rate-limit";
 import { fail, json, tokenMatches } from "@/lib/server/http";
 import { writeLedger } from "@/lib/server/ledger";
 import { reconcile, type SubscriptionRow } from "@/lib/server/subscriptions";
+import { sessionFrom } from "@/lib/server/wallet-auth";
 
 const body = z.object({
-  token: z.string().min(10),
+  token: z.string().min(10).optional(),
   txHash: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{43,44}$/, "Not a NEAR transaction hash"),
   sender: z.string().min(2).max(64),
 });
@@ -30,7 +31,9 @@ export async function POST(req: Request, ctx: RouteContext<"/api/subscriptions/[
     await db().from("subscriptions").select("id,business_id,product_id,topic,customer_account,state,issues_total,issues_started,issue_price_units,onchain_subscription_id,access_token_hash,next_due_at,refund_units,refund_status,cancel_tx").eq("id", id).single(),
     "subscription",
   );
-  if (!tokenMatches(token, sub.access_token_hash)) return fail(403, "Invalid subscription token");
+  // The private link or the subscriber's wallet session. Either way the on-chain event below is the real check.
+  const viaSession = !!sub.customer_account && (await sessionFrom(req)) === sub.customer_account;
+  if (!viaSession && !tokenMatches(token ?? null, sub.access_token_hash)) return fail(403, "Invalid subscription token");
   if (sub.cancel_tx) return json({ ok: true, note: "Cancellation already recorded" });
 
   const v = await bufferEventsFromTx(txHash, sender);

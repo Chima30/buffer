@@ -5,12 +5,14 @@
 import { db, must } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
 import { json, tokenMatches } from "@/lib/server/http";
+import { sessionFrom } from "@/lib/server/wallet-auth";
 
 export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
   const { id } = await ctx.params;
   const token = new URL(req.url).searchParams.get("token");
-  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,created_at,updated_at,failure_reason,issue_number,products(sku,title),subscriptions(id,issues_total)").eq("id", id).single(), "order");
-  const authorised = tokenMatches(token, order.access_token_hash);
+  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,customer_account,created_at,updated_at,failure_reason,issue_number,products(sku,title),subscriptions(id,issues_total)").eq("id", id).single(), "order");
+  // The private link, or a wallet session for the account that paid.
+  const authorised = tokenMatches(token, order.access_token_hash) || (!!order.customer_account && (await sessionFrom(req)) === order.customer_account);
 
   const [transitions, ledger, approval] = await Promise.all([
     db().from("order_transitions").select("from_state,to_state,reason,at").eq("order_id", id).order("at"),

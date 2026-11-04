@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
 import { txHashOf, useNearWallet } from "@/components/wallet";
 import { cadence } from "@/lib/domain/cadence";
+import { sessionHeaders } from "@/lib/client/session";
 
 interface SubData {
   id: string;
@@ -87,7 +88,7 @@ export function SubscriptionView() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/subscriptions/${id}${token ? `?token=${token}` : ""}`, { cache: "no-store" });
+      const res = await fetch(`/api/subscriptions/${id}${token ? `?token=${token}` : ""}`, { cache: "no-store", headers: sessionHeaders() });
       if (!res.ok) throw new Error((await res.json()).error ?? "Subscription not found");
       setSub(await res.json());
       setLoadError(null);
@@ -136,7 +137,7 @@ export function SubscriptionView() {
           {sub.intervalSeconds !== null && <p className="mt-2 text-xs text-ink-3">One issue {cadence(sub.intervalSeconds)}. The contract refuses to open an issue early.</p>}
 
           {sub.state === "AWAITING_PAYMENT" && sub.authorised && token && <PaymentPanel sub={sub} token={token} onPaid={load} />}
-          {!sub.authorised && <Notice tone="simulated">You are viewing public status only. The topic and issues open with the private link from checkout.</Notice>}
+          {!sub.authorised && <Notice tone="simulated">You are viewing public status only. The topic and issues open with the private link from checkout, or in My orders after signing in with the wallet that paid.</Notice>}
           {sub.state === "CANCELLED" && sub.refund && (
             <Notice tone={sub.refund.status === "Confirmed" ? "real" : sub.refund.status === "Failed" ? "failed" : "pending"}>
               Cancelled. <Money units={sub.refund.units} /> for the unstarted issues {sub.refund.status === "Confirmed" ? "was refunded to you by the contract." : sub.refund.status === "Failed" ? "could not be sent yet; the owner or agent can retry it." : "is on its way back to you."}
@@ -154,8 +155,8 @@ export function SubscriptionView() {
                     <li key={i.id} className="flex items-center justify-between gap-3 py-2.5">
                       <span className="min-w-0">
                         <span className="font-mono text-xs text-ink-3">#{i.number}</span>{" "}
-                        {token && sub.authorised ? (
-                          <Link href={`/orders/${i.id}#t=${token}`} className="text-accent">
+                        {sub.authorised ? (
+                          <Link href={`/orders/${i.id}${token ? `#t=${token}` : ""}`} className="text-accent">
                             {i.title ?? `Issue ${i.number}`}
                           </Link>
                         ) : (
@@ -182,7 +183,7 @@ export function SubscriptionView() {
                   <p className="whitespace-pre-wrap text-sm text-ink-2">{sub.topic}</p>
                 </Card>
               )}
-              {sub.state === "ACTIVE" && sub.authorised && token && <CancelPanel sub={sub} token={token} onDone={load} />}
+              {sub.state === "ACTIVE" && sub.authorised && <CancelPanel sub={sub} token={token} onDone={load} />}
             </div>
           </div>
         </>
@@ -284,7 +285,7 @@ function PaymentPanel({ sub, token, onPaid }: { sub: SubData; token: string; onP
   );
 }
 
-function CancelPanel({ sub, token, onDone }: { sub: SubData; token: string; onDone: () => void }) {
+function CancelPanel({ sub, token, onDone }: { sub: SubData; token: string | null; onDone: () => void }) {
   const wallet = useNearWallet();
   const [busy, setBusy] = useState(false);
   const [txHash, setTxHash] = useState("");
@@ -297,7 +298,7 @@ function CancelPanel({ sub, token, onDone }: { sub: SubData; token: string; onDo
   async function record(hash: string, sender: string) {
     setMsg({ tone: "pending", text: "Checking the cancellation on NEAR testnet…" });
     for (let i = 0; i < 6; i++) {
-      const res = await fetch(`/api/subscriptions/${sub.id}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token, txHash: hash, sender }) });
+      const res = await fetch(`/api/subscriptions/${sub.id}/cancel`, { method: "POST", headers: { "Content-Type": "application/json", ...sessionHeaders() }, body: JSON.stringify({ token: token ?? undefined, txHash: hash, sender }) });
       const j = await res.json();
       if (res.ok) {
         setMsg({ tone: "real", text: "Cancelled on-chain. Your refund was sent by the contract." });

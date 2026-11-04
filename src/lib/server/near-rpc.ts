@@ -142,3 +142,14 @@ export async function nearBalance(accountId: string): Promise<{ total: bigint; s
     return null;
   }
 }
+
+/** Permission of `publicKey` on `accountId`: "FullAccess", "FunctionCall", or null if the key is not on the account. */
+export async function viewAccessKey(accountId: string, publicKey: string): Promise<"FullAccess" | "FunctionCall" | null> {
+  try {
+    const r = await rpc<{ permission: "FullAccess" | { FunctionCall: unknown } }>("query", { request_type: "view_access_key", finality: "final", account_id: accountId, public_key: publicKey });
+    return r.permission === "FullAccess" ? "FullAccess" : "FunctionCall";
+  } catch (e) {
+    if (/UNKNOWN_ACCESS_KEY|UNKNOWN_ACCOUNT/.test((e as Error).message)) return null;
+    throw e;
+  }
+}

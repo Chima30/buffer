@@ -7,6 +7,7 @@ import { Money } from "@/components/money";
 import { StatusBadge } from "@/components/status-badge";
 import { ReportMarkdown } from "@/components/report-markdown";
 import { txHashOf, useNearWallet } from "@/components/wallet";
+import { sessionHeaders } from "@/lib/client/session";
 import { resolutionOf } from "@/lib/domain/ledger-view";
 import type { LedgerStatus } from "@/lib/domain/ledger";
 
@@ -83,7 +84,7 @@ export function OrderView() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/orders/${id}${token ? `?token=${token}` : ""}`, { cache: "no-store" });
+      const res = await fetch(`/api/orders/${id}${token ? `?token=${token}` : ""}`, { cache: "no-store", headers: sessionHeaders() });
       if (!res.ok) throw new Error((await res.json()).error ?? "Order not found");
       setOrder(await res.json());
       setLoadError(null);
@@ -133,7 +134,7 @@ export function OrderView() {
           )}
           {order.state === "REFUND_PENDING" && <Notice tone="failed">This order is being refunded in full. The agent has stopped working on it.</Notice>}
           {order.state === "REFUNDED" && <Notice tone="simulated">This order was refunded. The refund transaction is in the ledger below.</Notice>}
-          {!order.authorised && <Notice tone="simulated">You are viewing public status only. The brief and report are visible with the private link from checkout.</Notice>}
+          {!order.authorised && <Notice tone="simulated">You are viewing public status only. The brief and report are visible with the private link from checkout, or in My orders after signing in with the wallet that paid.</Notice>}
 
           <div className="mt-8 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
             <div className="space-y-6">
