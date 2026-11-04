@@ -18,7 +18,7 @@ const usd = (units: string) => (Number(units) / 1e6).toLocaleString("en-US", { m
 
 const FIELDS: { key: string; label: string; placeholder: string; hint?: string }[] = [
   { key: "businessName", label: "Business name", placeholder: "Lagos Price Watch" },
-  { key: "owner", label: "Owner NEAR account", placeholder: "you.testnet", hint: "Signs every rule change, approval and emergency stop." },
+  { key: "owner", label: "Owner NEAR account", placeholder: "you.testnet", hint: "Filled from your connected wallet. Signs every rule change, approval and emergency stop." },
   { key: "contributor", label: "Contributor NEAR account", placeholder: "partner.testnet", hint: "Receives a share of net revenue." },
   { key: "productTitle", label: "What you sell", placeholder: "Weekly food price report" },
   { key: "productSku", label: "Product id", placeholder: "food-prices", hint: "Lowercase letters, digits and dashes." },
@@ -34,9 +34,32 @@ export default function NewBusinessPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
+  const wallet = useNearWallet();
+  const [pendingBuild, setPendingBuild] = useState(false);
+  // The connected wallet is the owner unless the user typed another account.
+  const owner = form.owner ?? wallet.signedAccountId ?? "";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
+    let account = wallet.signedAccountId;
+    if (!account) {
+      setPendingBuild(true);
+      try {
+        await wallet.signIn();
+        const accounts = await wallet.connector?.getConnectedWallet().then((c) => c.accounts).catch(() => []);
+        account = accounts?.[0]?.accountId ?? "";
+      } catch {
+        account = "";
+      } finally {
+        setPendingBuild(false);
+      }
+      if (!account) return setError("Connect a NEAR testnet wallet to build the plan.");
+    }
+    await build({ ...form, owner: form.owner?.trim() ? form.owner : account });
+  }
+
+  async function build(values: Record<string, string>) {
     setBusy(true);
     setError(null);
     setDraft(null);
@@ -44,7 +67,7 @@ export default function NewBusinessPage() {
       const res = await fetch("/api/onboarding/draft", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...form, contributorPercent: Number(form.contributorPercent) }),
+        body: JSON.stringify({ ...values, contributorPercent: Number(values.contributorPercent) }),
       });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Could not build the draft");
@@ -72,14 +95,14 @@ export default function NewBusinessPage() {
       <p className="text-sm text-ink-3">Start a business</p>
       <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">Your rules, an AI agent, a contract that enforces them</h1>
       <p className="mt-2 text-sm text-ink-2">
-        Describe what you sell and how the agent may spend. You get the starting policy with its hash, the contract settings and a launch checklist. Nothing is created or signed here: you run each step yourself.
+        Describe what you sell and how the agent may spend. You get the starting policy with its hash, the contract settings and a launch checklist. Connect your NEAR wallet to start. Building the plan signs nothing: you approve each launch step yourself.
       </p>
 
       <form onSubmit={submit} className="mt-8 grid gap-4 rounded-[var(--radius-card)] border border-rule bg-surface p-5 sm:grid-cols-2">
         {FIELDS.map((f) => (
           <label key={f.key} className="block text-sm">
             <span className="font-medium">{f.label}</span>
-            <input required value={form[f.key] ?? ""} onChange={set(f.key)} placeholder={f.placeholder} className="mt-1 w-full rounded-md border border-rule-strong bg-paper p-2 text-sm" />
+            <input required={f.key !== "owner" || !!wallet.signedAccountId} value={f.key === "owner" ? owner : (form[f.key] ?? "")} onChange={set(f.key)} placeholder={f.placeholder} className="mt-1 w-full rounded-md border border-rule-strong bg-paper p-2 text-sm" />
             {f.hint && <span className="mt-0.5 block text-xs text-ink-3">{f.hint}</span>}
           </label>
         ))}
@@ -99,7 +122,7 @@ export default function NewBusinessPage() {
           <textarea value={form.rules} onChange={set("rules")} rows={3} maxLength={1000} placeholder="e.g. Purchases above $5 need my approval. Keep AI spending under $5 a day." className="mt-1 w-full rounded-md border border-rule-strong bg-paper p-2 text-sm" />
         </label>
         {error && <p role="alert" className="rounded-md bg-failed-soft p-3 text-sm text-failed sm:col-span-2">{error}</p>}
-        <button disabled={busy} className="rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-paper disabled:opacity-60 sm:col-span-2">{busy ? "Building the plan…" : "Build the plan"}</button>
+        <button disabled={busy} className="rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-paper disabled:opacity-60 sm:col-span-2">{busy ? "Building the plan…" : pendingBuild ? "Waiting for your wallet…" : wallet.signedAccountId ? "Build the plan" : "Connect wallet and build the plan"}</button>
       </form>
 
       {draft && (
@@ -132,7 +155,7 @@ export default function NewBusinessPage() {
                   <div className="min-w-0">
                     <div className="font-medium">{c.step}</div>
                     <p className="text-xs text-ink-2">{c.detail}</p>
-                    {c.call && <WalletStep call={c.call} owner={form.owner} />}
+                    {c.call && <WalletStep call={c.call} owner={owner} />}
                     {c.command && (
                       <details className="mt-2" open={!c.call}>
                         <summary className="cursor-pointer text-xs text-ink-2">{c.call ? "Or with near-cli" : "near-cli command"}</summary>
