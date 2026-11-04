@@ -18,6 +18,10 @@
  * "treasury" expenses (PAID) are cross-chain vendor payments made from the
  * owner-funded Ethereum treasury through Chain Signatures. Like inference they are
  * reimbursed to the owner inside the cap, exactly as the contract's settle does.
+ *
+ * Business reserve (self-funding treasury): R = min(floor(O * reserveBps / 10000),
+ * target - balance) is kept by the contract out of the owner's share; the owner is
+ * paid O - R. The contributor's share is never touched.
  * The agent never holds funds: vendors are paid by the contract, not reimbursed.
  */
 
@@ -42,10 +46,12 @@ export interface SettlementInput {
   maxExpense: Units;
   contributorBps: number;
   expenses: ExpenseInput[];
+  /** The contract's reserve rule and balance at settlement time. */
+  reserve?: { bps: number; target: Units; balance: Units };
 }
 
 /** Legs the contract pays at settlement. Vendor payments already happened during the order. */
-export type PayoutLeg = "owner" | "contributor" | "reimb_owner";
+export type PayoutLeg = "owner" | "contributor" | "reimb_owner" | "reserve";
 
 export interface SettlementResult {
   formulaVersion: number;
@@ -55,7 +61,12 @@ export interface SettlementResult {
   expensesUncounted: Units;
   distributable: Units;
   contributorShare: Units;
+  /** The owner's 70% before the reserve is taken. */
   ownerShare: Units;
+  /** Kept by the contract as the business reserve. */
+  reserveKept: Units;
+  /** What the owner is actually paid from their share: ownerShare - reserveKept. */
+  ownerPayout: Units;
   reimbOwner: Units;
   legs: { leg: PayoutLeg; amount: Units }[];
   excludedExpenseIds: string[];
@@ -118,14 +129,19 @@ export function computeSettlement(input: SettlementInput): SettlementResult {
   const ownerShare = distributable - contributorShare;
   const reimbOwner = expenses - paidToVendors;
 
+  const r = input.reserve;
+  const reserveKept = r ? reserveCut(ownerShare, r.bps, r.target, r.balance) : 0n;
+  const ownerPayout = ownerShare - reserveKept;
+
   const total = paidToVendors + reimbOwner + contributorShare + ownerShare;
   if (total !== gross) throw new Error(`Invariant violated: parts sum to ${total}, gross is ${gross}`);
 
   const legs = (
     [
-      { leg: "owner", amount: ownerShare },
+      { leg: "owner", amount: ownerPayout },
       { leg: "contributor", amount: contributorShare },
       { leg: "reimb_owner", amount: reimbOwner },
+      { leg: "reserve", amount: reserveKept },
     ] as { leg: PayoutLeg; amount: Units }[]
   ).filter((l) => l.amount > 0n);
 
@@ -138,6 +154,8 @@ export function computeSettlement(input: SettlementInput): SettlementResult {
     distributable,
     contributorShare,
     ownerShare,
+    reserveKept,
+    ownerPayout,
     reimbOwner,
     legs,
     excludedExpenseIds: excluded,
@@ -168,4 +186,13 @@ export function computeRefund(gross: Units, expenses: ExpenseInput[]): RefundRes
     ownerTopUpRequired: vendorPaid,
     unrecoveredLoss: vendorPaid + inferenceSpent,
   };
+}
+
+/** Mirrors `reserve_cut` in the contract. */
+export function reserveCut(ownerShare: Units, reserveBps: number, target: Units, balance: Units): Units {
+  const bps = assertBps(reserveBps);
+  const wanted = (ownerShare * bps) / BPS_DENOMINATOR;
+  const room = target > balance ? target - balance : 0n;
+  const cut = wanted < room ? wanted : room;
+  return cut < ownerShare ? cut : ownerShare;
 }

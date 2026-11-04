@@ -584,20 +584,170 @@ fn settlement_reimburses_the_owner_for_signed_evm_purchases() {
 
 #[test]
 fn migrate_keeps_existing_state() {
-    let mut c = setup();
-    pay(&mut c, "o-old", 20 * USDC);
+    let mut c = evm_setup(); // pays o-1 and configures Ethereum
+    let _ = evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI);
     c.products.flush();
     c.vendors.flush();
     c.orders.flush();
-    // Rebuild the pre-upgrade layout from the same collections, write it, then migrate.
-    let Contract { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, products, vendors, orders, .. } = c;
-    let v1 = ContractV1 { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, policy_version: 3, policy_hash: Some("ab".repeat(32)), products, vendors, orders };
-    env::state_write(&v1);
+    c.evm_vendors.flush();
+    c.evm_purchases.flush();
+    // Rebuild the pre-treasury layout from the same collections, write it, then migrate.
+    let Contract { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, products, vendors, orders, evm, evm_vendors, evm_purchases, evm_nonce, .. } = c;
+    let v2 = ContractV2 { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, policy_version: 3, policy_hash: Some("ab".repeat(32)), products, vendors, orders, evm, evm_vendors, evm_purchases, evm_nonce };
+    env::state_write(&v2);
     testing_env!(ctx(contract_id()).build());
     let m = Contract::migrate();
     assert_eq!(m.get_config().policy_version, 3);
-    assert_eq!(m.get_order("o-old".into()).unwrap().state, OrderState::Paid);
+    assert_eq!(m.get_order("o-1".into()).unwrap().state, OrderState::Paid);
     assert_eq!(m.get_products().len(), 1);
-    assert!(m.get_evm_config().is_none());
-    assert_eq!(m.get_evm_nonce(), 0);
+    assert!(m.get_evm_config().is_some());
+    assert_eq!(m.get_evm_vendors().len(), 1);
+    assert_eq!(m.get_evm_purchases("o-1".into()).len(), 1);
+    assert_eq!(m.get_evm_nonce(), 1);
+    assert_eq!(m.get_treasury(), Treasury::default());
+}
+
+// ---------- self-funding treasury ----------
+
+const NEAR: u128 = 10u128.pow(24);
+
+fn with_reserve(c: &mut Contract, bps: u16, target: u128) {
+    as_owner(|| c.set_treasury_rules(bps, U128(target), U128(NEAR / 2), U128(2 * NEAR)));
+}
+
+fn settle_plain(c: &mut Contract, order: &str) {
+    pay(c, order, 20 * USDC);
+    as_agent(|| c.mark_fulfilled(order.into(), "ab".repeat(32)));
+    as_agent(|| c.settle(order.into(), inference(400_000)));
+}
+
+fn leg(c: &Contract, order: &str, k: LegKind) -> u128 {
+    c.get_order(order.into()).unwrap().legs.iter().find(|l| l.kind == k).map(|l| l.amount.0).unwrap_or(0)
+}
+
+#[test]
+fn reserve_comes_out_of_the_owner_share_only() {
+    let mut c = setup();
+    with_reserve(&mut c, 1000, 20 * USDC);
+    settle_plain(&mut c, "o-1");
+    // gross 20, inference 0.4: net 19.6, contributor 5.88, owner 13.72 -> reserve 1.372
+    assert_eq!(leg(&c, "o-1", LegKind::Contributor), 5_880_000);
+    assert_eq!(leg(&c, "o-1", LegKind::Reserve), 1_372_000);
+    assert_eq!(leg(&c, "o-1", LegKind::Owner), 12_348_000);
+    let o = c.get_order("o-1".into()).unwrap();
+    assert_eq!(o.legs.iter().map(|l| l.amount.0).sum::<u128>(), 20 * USDC);
+    assert_eq!(c.get_treasury().reserve_balance, U128(1_372_000));
+    // The reserve leg is never sent, so it is already confirmed.
+    assert_eq!(o.legs.iter().find(|l| l.kind == LegKind::Reserve).unwrap().status, LegStatus::Confirmed);
+}
+
+#[test]
+fn reserve_stops_at_its_target() {
+    let mut c = setup();
+    with_reserve(&mut c, 5000, 8 * USDC);
+    settle_plain(&mut c, "o-1"); // wants 6.86, keeps 6.86
+    settle_plain(&mut c, "o-2"); // wants 6.86, room 1.14
+    assert_eq!(leg(&c, "o-2", LegKind::Reserve), 1_140_000);
+    assert_eq!(c.get_treasury().reserve_balance, U128(8 * USDC));
+    settle_plain(&mut c, "o-3");
+    assert_eq!(leg(&c, "o-3", LegKind::Reserve), 0);
+}
+
+#[test]
+fn no_rules_means_no_reserve() {
+    let mut c = setup();
+    settle_plain(&mut c, "o-1");
+    assert_eq!(leg(&c, "o-1", LegKind::Reserve), 0);
+    assert_eq!(leg(&c, "o-1", LegKind::Owner), 13_720_000);
+}
+
+#[test]
+fn refunds_use_the_reserve_before_asking_the_owner() {
+    let mut c = setup();
+    with_reserve(&mut c, 10000, 20 * USDC);
+    settle_plain(&mut c, "o-1"); // reserve keeps the whole owner share: 13.72
+    paid_with_purchase_on(&mut c, "o-2"); // 12 USDC left escrow for the vendor
+    let _ = as_owner(|| c.refund("o-2".into()));
+    let o = c.get_order("o-2".into()).unwrap();
+    assert_eq!(o.legs[0].amount, U128(20 * USDC));
+    assert_eq!(c.get_treasury().reserve_balance, U128(13_720_000 - 12 * USDC));
+}
+
+fn paid_with_purchase_on(c: &mut Contract, order: &str) {
+    pay(c, order, 20 * USDC);
+    let _ = as_agent(|| c.request_purchase(order.into(), vendor(), U128(12 * USDC), "dataset".into()));
+    let _ = as_owner(|| c.approve_purchase(order.into(), 0));
+    resolve_purchase(c, order, 0, true);
+}
+
+#[test]
+fn gas_refills_are_capped_per_week() {
+    let mut c = setup();
+    with_reserve(&mut c, 0, 0);
+    testing_env!(ctx(owner()).attached_deposit(NearToken::from_yoctonear(5 * NEAR)).build());
+    c.fund_gas_reserve();
+    for _ in 0..4 {
+        let _ = as_agent(|| c.refill_agent_gas());
+    }
+    assert_eq!(c.get_treasury().gas_spent_week, U128(2 * NEAR));
+    assert_eq!(c.get_treasury().gas_reserve, U128(3 * NEAR));
+}
+
+#[test]
+#[should_panic(expected = "weekly gas refill cap reached")]
+fn gas_refill_beyond_the_cap_is_refused() {
+    let mut c = setup();
+    with_reserve(&mut c, 0, 0);
+    testing_env!(ctx(owner()).attached_deposit(NearToken::from_yoctonear(5 * NEAR)).build());
+    c.fund_gas_reserve();
+    for _ in 0..5 {
+        let _ = as_agent(|| c.refill_agent_gas());
+    }
+}
+
+#[test]
+fn gas_cap_resets_after_a_week() {
+    let mut c = setup();
+    with_reserve(&mut c, 0, 0);
+    testing_env!(ctx(owner()).attached_deposit(NearToken::from_yoctonear(5 * NEAR)).build());
+    c.fund_gas_reserve();
+    for _ in 0..4 {
+        let _ = as_agent(|| c.refill_agent_gas());
+    }
+    testing_env!(ctx(agent()).block_timestamp(1_000 + WEEK_NS + 1).build());
+    let _ = c.refill_agent_gas();
+    assert_eq!(c.get_treasury().gas_spent_week, U128(NEAR / 2));
+}
+
+#[test]
+#[should_panic(expected = "owner only")]
+fn agent_cannot_change_treasury_rules() {
+    let mut c = setup();
+    as_agent(|| c.set_treasury_rules(10000, U128(u128::MAX), U128(NEAR), U128(NEAR)));
+}
+
+#[test]
+#[should_panic(expected = "owner only")]
+fn agent_cannot_withdraw_the_reserve() {
+    let mut c = setup();
+    with_reserve(&mut c, 10000, 20 * USDC);
+    settle_plain(&mut c, "o-1");
+    let _ = as_agent(|| c.withdraw_reserve(U128(USDC)));
+}
+
+#[test]
+#[should_panic(expected = "agent only")]
+fn strangers_cannot_trigger_gas_refills() {
+    let mut c = setup();
+    with_reserve(&mut c, 0, 0);
+    testing_env!(ctx(acct("mallory.testnet")).build());
+    let _ = c.refill_agent_gas();
+}
+
+#[test]
+fn reserve_cut_math() {
+    assert_eq!(reserve_cut(13_720_000, 1000, 20 * USDC, 0), 1_372_000);
+    assert_eq!(reserve_cut(13_720_000, 1000, 1_000_000, 500_000), 500_000);
+    assert_eq!(reserve_cut(13_720_000, 1000, 1_000_000, 2_000_000), 0);
+    assert_eq!(reserve_cut(5, 10000, u128::MAX, 0), 5);
 }

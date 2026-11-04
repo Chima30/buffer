@@ -5,7 +5,8 @@
  *   buffer: purchase_approved (+ purchase_paid), purchase_rejected, paused, unpaused,
  *           policy_anchored, approval_threshold_set,
  *           evm_purchase_approved / _signed / _rejected, evm_config_set, evm_vendor_set, evm_nonce_set,
- *           refund_topped_up, refund_started, leg_confirmed (refund leg), order_refunded
+ *           refund_topped_up, refund_started, leg_confirmed (refund leg), order_refunded,
+ *           treasury_rules_set, gas_reserve_funded, gas_reserve_withdrawn, reserve_withdrawn
  *   near-outlayer: WalletFrozenChanged for this agent's wallet
  * Anyone may submit a hash; a hash only ever proves what the owner already did.
  */
@@ -70,6 +71,13 @@ export async function POST(req: Request) {
     } else if (e.event === "evm_config_set" || e.event === "evm_vendor_set" || e.event === "evm_nonce_set") {
       await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
       recorded.push(e.event);
+    } else if (e.event === "treasury_rules_set" || e.event === "gas_reserve_funded" || e.event === "gas_reserve_withdrawn") {
+      // NEAR amounts stay in details: amount_units on the ledger is always USDC.
+      await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
+      recorded.push(e.event);
+    } else if (e.event === "reserve_withdrawn") {
+      await writeLedger({ businessId: business.id, eventType: "reserve_withdrawn", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: String(e.data.to) });
+      recorded.push(e.event);
     } else if (e.event === "refund_topped_up") {
       await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "refund_topped_up", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: near.ownerAccountId });
       recorded.push(e.event);
@@ -79,7 +87,7 @@ export async function POST(req: Request) {
         if (canTransition(o.state, "REFUND_PENDING")) await transition(o, "REFUND_PENDING", "owner started a refund on-chain");
         await db().from("jobs").update({ status: "done", lease_until: null, last_error: "order is being refunded" }).eq("order_id", orderRow.id).in("status", ["queued", "running"]);
       }
-      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "refund_started", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: String(e.data.to), details: { shortfall: e.data.shortfall } });
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "refund_started", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: String(e.data.to), details: { shortfall: e.data.shortfall, from_reserve: e.data.from_reserve ?? "0" } });
       recorded.push(e.event);
     } else if (e.event === "leg_confirmed" && e.data.kind === "Refund") {
       await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "refund_paid", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: String(e.data.recipient) });

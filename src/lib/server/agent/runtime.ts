@@ -13,7 +13,7 @@ import { evaluate } from "@/lib/domain/policy/evaluate";
 import { formatUnits } from "@/lib/domain/money";
 import { computeSettlement, type ExpenseInput } from "@/lib/domain/revenue";
 import { HaltError, evaluationContext, loadBusinessAnchored, scopeFor, type BusinessContext } from "../business";
-import { getOrder } from "../contract";
+import { getOrder, getTreasury } from "../contract";
 import { db, must } from "../db";
 import { nearConfig, sepoliaConfig } from "../env";
 import { assembleSigned, broadcast, getEvmConfig, getEvmPurchases, offerFees, treasury, verifyUsdcTransfer } from "../evm";
@@ -351,7 +351,8 @@ async function stepSettle(order: OrderRow, ctx: BusinessContext, attempt: number
     ...calls.map((c) => ({ id: c.id, category: "inference" as const, amount: BigInt(c.cost_usd_micros), status: "METERED" as const, evidenceRef: `chat:${c.chat_id}` })),
   ];
   // Off-chain preview with the same formula the contract runs; used for reconciliation.
-  const preview = computeSettlement({ gross: BigInt(onchain.gross), maxExpense: BigInt(ctx.product.max_expense_units), contributorBps: ctx.contributorBps, expenses });
+  const t = onchain.state === "Fulfilled" ? await getTreasury() : null;
+  const preview = computeSettlement({ gross: BigInt(onchain.gross), maxExpense: BigInt(ctx.product.max_expense_units), contributorBps: ctx.contributorBps, expenses, reserve: t ? { bps: t.reserve_bps, target: BigInt(t.reserve_target), balance: BigInt(t.reserve_balance) } : undefined });
 
   if (onchain.state === "Fulfilled") {
     if (order.state === "DELIVERED") await transition(order, "SETTLING", "settlement requested");
@@ -393,16 +394,17 @@ async function recordSettlement(order: OrderRow, txHash: string, preview: Return
     expenses_counted: counted.toString(),
     expenses_uncounted: preview.expensesUncounted.toString(),
     distributable: (gross - counted).toString(),
-    owner_share: leg("Owner").toString(),
+    owner_share: (leg("Owner") + leg("Reserve")).toString(),
     contributor_share: leg("Contributor").toString(),
     paid_to_vendors: paidToVendors.toString(),
     reimb_owner: leg("ReimbOwner").toString(),
   };
   await db().from("revenue_records").upsert(row, { onConflict: "order_id" });
-  if (preview.ownerShare !== leg("Owner") || preview.contributorShare !== leg("Contributor")) {
+  // The owner's share is what they were paid plus what the reserve kept.
+  if (preview.ownerShare !== leg("Owner") + leg("Reserve") || preview.contributorShare !== leg("Contributor")) {
     await audit(order.business_id, "runtime", "reconciliation_mismatch", order.id, { preview: { owner: preview.ownerShare.toString(), contributor: preview.contributorShare.toString() }, onchain: row });
   }
-  const kindToLeg: Record<string, string> = { Owner: "owner", Contributor: "contributor", ReimbOwner: "reimb_owner" };
+  const kindToLeg: Record<string, string> = { Owner: "owner", Contributor: "contributor", ReimbOwner: "reimb_owner", Reserve: "reserve" };
   // What the owner's reimbursement is for: the Ethereum treasury purchases first, then inference.
   const treasuryPaid = (await getEvmPurchases(order.onchain_order_id).catch(() => [])).filter((p) => p.status === "Signed").reduce((a, p) => a + BigInt(p.amount), 0n);
   const reimb = leg("ReimbOwner");

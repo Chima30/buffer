@@ -18,7 +18,7 @@ export interface OnchainOrder {
   purchases: { vendor: string; amount: string; memo: string; status: PurchaseStatus }[];
   refund_top_up: string;
   expenses_counted: string;
-  legs: { kind: "Owner" | "Contributor" | "ReimbOwner" | "Refund"; recipient: string; amount: string; status: "Pending" | "Confirmed" | "Failed"; attempts: number }[];
+  legs: { kind: "Owner" | "Contributor" | "ReimbOwner" | "Refund" | "Reserve"; recipient: string; amount: string; status: "Pending" | "Confirmed" | "Failed"; attempts: number }[];
 }
 
 export interface OnchainConfig {
@@ -32,6 +32,22 @@ export interface OnchainConfig {
   paused: boolean;
   policy_version: number;
   policy_hash: string | null;
+}
+
+export interface OnchainTreasury {
+  reserve_bps: number;
+  reserve_target: string;
+  reserve_balance: string;
+  gas_reserve: string;
+  gas_refill_amount: string;
+  gas_week_cap: string;
+  gas_week_start_ns: number;
+  gas_spent_week: string;
+}
+
+/** Null before the treasury upgrade is deployed. */
+export async function getTreasury(): Promise<OnchainTreasury | null> {
+  return viewFunction<OnchainTreasury>(nearConfig().contractId, "get_treasury").catch(() => null);
 }
 
 export async function getOrder(orderId: string): Promise<OnchainOrder | null> {

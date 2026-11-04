@@ -5,7 +5,7 @@
  * a wallet-signed transaction, so this route grants no admin power.
  */
 import { connection } from "next/server";
-import { getConfig } from "@/lib/server/contract";
+import { getConfig, getTreasury } from "@/lib/server/contract";
 import { editableValues } from "@/lib/domain/policy/draft";
 import type { PolicyDocument } from "@/lib/domain/policy/schema";
 import { promoteAnchoredDraft } from "@/lib/server/business";
@@ -67,6 +67,21 @@ export async function GET() {
   }));
 
   const t = await treasuryBalances().catch(() => null);
+  const [onchainTreasury, gasRefills, agentGas] = await Promise.all([
+    getTreasury(),
+    db().from("ledger_entries").select("tx_hash,explorer_url,details,at").eq("event_type", "gas_refilled").order("at", { ascending: false }).limit(5),
+    agent.data?.near_account ? nearBalance(agent.data.near_account) : Promise.resolve(null),
+  ]);
+  const evmVendorPrice = (await db().from("vendors").select("unit_price_units").eq("chain", "sepolia").eq("approved", true).limit(1).maybeSingle()).data?.unit_price_units;
+  const evmPrice = evmVendorPrice ? BigInt(evmVendorPrice) : null;
+  const business_treasury = onchainTreasury
+    ? {
+        ...onchainTreasury,
+        agentGasYocto: agentGas?.spendable.toString() ?? null,
+        refills: gasRefills.data ?? [],
+        ethereumShortfall: t && evmPrice && t.usdc < evmPrice ? (evmPrice - t.usdc).toString() : "0",
+      }
+    : null;
   const treasury = t ? { address: t.address, eth: t.eth.toString(), usdc: t.usdc.toString(), explorerUrl: sepoliaConfig().explorerAddressUrl(t.address) } : null;
 
   // Low balances that would stall the business during judging.
@@ -76,12 +91,12 @@ export async function GET() {
   if (agentNear && agentNear.spendable < YOCTO / 2n) alerts.push(`Agent wallet has ${(Number(agentNear.spendable / 10n ** 21n) / 1000).toFixed(3)} NEAR for gas; top it up above 0.5 NEAR or it cannot call the contract.`);
   if (contractNear && contractNear.spendable < YOCTO) alerts.push(`Business contract has ${(Number(contractNear.spendable / 10n ** 21n) / 1000).toFixed(3)} NEAR free; new orders need storage. Send it at least 1 NEAR.`);
   if (t && t.eth < 10n ** 16n) alerts.push("Ethereum treasury has under 0.01 Sepolia ETH for gas; cross-chain purchases will not broadcast.");
-  const evmVendorPrice = (await db().from("vendors").select("unit_price_units").eq("chain", "sepolia").eq("approved", true).limit(1).maybeSingle()).data?.unit_price_units;
   if (t && evmVendorPrice && t.usdc < BigInt(evmVendorPrice)) alerts.push("Ethereum treasury holds less Sepolia USDC than one dataset costs; cross-chain purchases will fail. Top it up from faucet.circle.com.");
 
   return json({
     alerts,
     refunds,
+    businessTreasury: business_treasury,
     treasury,
     tokenId: near.usdcTokenId,
     business: business.data,
@@ -106,6 +121,7 @@ export async function GET() {
       net: revenue - vendor - inference,
       ownerPaid: paid("owner") + paid("reimb_owner"),
       contributorPaid: paid("contributor"),
+      reserveKept: paid("reserve"),
     },
     pendingApprovals: pending.data ?? [],
     orders: orders.data ?? [],

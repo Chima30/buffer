@@ -12,6 +12,13 @@
 //!   C  = floor(D * contributor_bps / 10000)      contributor
 //!   O  = D - C                                   owner (receives rounding dust)
 //!   reimb_owner = E - V
+//!
+//! Self-funding treasury: at settlement the contract keeps
+//!   R = min(floor(O * reserve_bps / 10000), reserve_target - reserve_balance)
+//! of the owner's share as the business reserve (the contributor's share is never
+//! touched). Refund shortfalls are paid from the reserve first. A separate NEAR
+//! gas reserve, funded by the owner, refills the agent's wallet within a weekly cap.
+//! Only the owner sets these rules or withdraws; the agent can only trigger them.
 //!   Invariant: V + reimb_owner + C + O == gross.
 //!
 //! The agent never holds revenue or a spending float. It can only request
@@ -51,6 +58,7 @@ const MAX_REF_LEN: usize = 128;
 const MPC_SIGN_GAS: Gas = Gas::from_tgas(50);
 const SIGN_CALLBACK_GAS: Gas = Gas::from_tgas(10);
 pub const EVM_TREASURY_PATH: &str = "buffer-treasury";
+const WEEK_NS: u64 = 7 * 24 * 3600 * 1_000_000_000;
 
 #[ext_contract(ext_ft)]
 #[allow(dead_code)]
@@ -147,6 +155,8 @@ pub enum LegKind {
     Contributor,
     ReimbOwner,
     Refund,
+    /// Kept by the contract as the business reserve; never transferred. Appended: keep last.
+    Reserve,
 }
 
 #[near(serializers = [json, borsh])]
@@ -303,6 +313,12 @@ pub fn compute_split(gross: u128, max_expense: u128, contributor_bps: u16, vendo
     Split { vendor_paid, expenses, distributable, owner, contributor, reimb_owner }
 }
 
+/// How much of the owner's share the reserve keeps: a percentage, never past the target.
+pub fn reserve_cut(owner_share: u128, reserve_bps: u16, target: u128, balance: u128) -> u128 {
+    let wanted = owner_share * reserve_bps as u128 / BPS_DENOMINATOR;
+    wanted.min(target.saturating_sub(balance)).min(owner_share)
+}
+
 #[derive(Deserialize)]
 #[serde(crate = "near_sdk::serde")]
 struct PaymentMsg {
@@ -338,11 +354,33 @@ pub struct Contract {
     evm_vendors: IterableMap<String, bool>,
     evm_purchases: LookupMap<String, Vec<EvmPurchase>>,
     evm_nonce: u64,
+    // ---- treasury upgrade (appended; see `migrate`) ----
+    treasury: Treasury,
 }
 
-/// State layout before the cross-chain upgrade, read once by `migrate`.
+/// Self-funding treasury state and the owner's rules for it.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct Treasury {
+    /// Share of the owner's 70% kept as reserve, in basis points.
+    pub reserve_bps: u16,
+    /// Stop keeping once the reserve reaches this (USDC units).
+    pub reserve_target: U128,
+    /// USDC held by the contract as the business reserve.
+    pub reserve_balance: U128,
+    /// NEAR (yocto) the owner deposited for the agent's gas.
+    pub gas_reserve: U128,
+    /// One refill, in yoctoNEAR.
+    pub gas_refill_amount: U128,
+    /// Most refills may send in a rolling week, in yoctoNEAR.
+    pub gas_week_cap: U128,
+    pub gas_week_start_ns: u64,
+    pub gas_spent_week: U128,
+}
+
+/// State layout before the treasury upgrade, read once by `migrate`.
 #[near(serializers = [borsh])]
-struct ContractV1 {
+struct ContractV2 {
     owner: AccountId,
     agent: AccountId,
     token_id: AccountId,
@@ -357,6 +395,10 @@ struct ContractV1 {
     products: IterableMap<String, Product>,
     vendors: IterableMap<AccountId, bool>,
     orders: LookupMap<String, Order>,
+    evm: Option<EvmConfig>,
+    evm_vendors: IterableMap<String, bool>,
+    evm_purchases: LookupMap<String, Vec<EvmPurchase>>,
+    evm_nonce: u64,
 }
 
 fn emit(event: &str, data: serde_json::Value) {
@@ -403,18 +445,19 @@ impl Contract {
             evm_vendors: IterableMap::new(StorageKey::EvmVendors),
             evm_purchases: LookupMap::new(StorageKey::EvmPurchases),
             evm_nonce: 0,
+            treasury: Treasury::default(),
         };
         c.assert_config_valid();
         c
     }
 
-    /// One-time upgrade from the pre-cross-chain layout. Keeps every existing
-    /// field, order and settlement; adds empty cross-chain state.
+    /// One-time upgrade from the cross-chain layout. Keeps every existing field,
+    /// order, purchase and settlement; adds an empty treasury with no rules set.
     #[private]
     #[init(ignore_state)]
     pub fn migrate() -> Self {
-        let old: ContractV1 = env::state_read().expect("no prior state");
-        emit("migrated", serde_json::json!({ "to": "cross-chain" }));
+        let old: ContractV2 = env::state_read().expect("no prior state");
+        emit("migrated", serde_json::json!({ "to": "treasury" }));
         Self {
             owner: old.owner,
             agent: old.agent,
@@ -430,10 +473,11 @@ impl Contract {
             products: old.products,
             vendors: old.vendors,
             orders: old.orders,
-            evm: None,
-            evm_vendors: IterableMap::new(StorageKey::EvmVendors),
-            evm_purchases: LookupMap::new(StorageKey::EvmPurchases),
-            evm_nonce: 0,
+            evm: old.evm,
+            evm_vendors: old.evm_vendors,
+            evm_purchases: old.evm_purchases,
+            evm_nonce: old.evm_nonce,
+            treasury: Treasury::default(),
         }
     }
 
@@ -504,6 +548,80 @@ impl Contract {
         self.assert_owner();
         self.evm_nonce = nonce;
         emit("evm_nonce_set", serde_json::json!({ "nonce": nonce }));
+    }
+
+    // ---------- treasury (owner rules, agent triggers) ----------
+
+    pub fn set_treasury_rules(&mut self, reserve_bps: u16, reserve_target: U128, gas_refill_amount: U128, gas_week_cap: U128) {
+        self.assert_owner();
+        require!(reserve_bps as u128 <= BPS_DENOMINATOR, "reserve_bps out of range");
+        require!(gas_refill_amount.0 <= gas_week_cap.0, "one refill cannot exceed the weekly cap");
+        let t = &mut self.treasury;
+        t.reserve_bps = reserve_bps;
+        t.reserve_target = reserve_target;
+        t.gas_refill_amount = gas_refill_amount;
+        t.gas_week_cap = gas_week_cap;
+        emit("treasury_rules_set", serde_json::json!({ "reserve_bps": reserve_bps, "reserve_target": reserve_target, "gas_refill_amount": gas_refill_amount, "gas_week_cap": gas_week_cap }));
+    }
+
+    /// Owner deposits NEAR the agent's gas refills are paid from.
+    #[payable]
+    pub fn fund_gas_reserve(&mut self) {
+        self.assert_owner();
+        let amount = env::attached_deposit().as_yoctonear();
+        require!(amount > 0, "attach NEAR to fund the gas reserve");
+        self.treasury.gas_reserve = U128(self.treasury.gas_reserve.0 + amount);
+        emit("gas_reserve_funded", serde_json::json!({ "amount": U128(amount), "gas_reserve": self.treasury.gas_reserve }));
+    }
+
+    /// Agent asks for one gas refill. The contract enforces the size and the weekly cap.
+    pub fn refill_agent_gas(&mut self) -> Promise {
+        self.assert_agent();
+        require!(!self.paused, "paused");
+        let now = env::block_timestamp();
+        let t = &mut self.treasury;
+        let amount = t.gas_refill_amount.0;
+        require!(amount > 0, "gas refills are not enabled");
+        require!(t.gas_reserve.0 >= amount, "gas reserve is too low");
+        if now.saturating_sub(t.gas_week_start_ns) >= WEEK_NS {
+            t.gas_week_start_ns = now;
+            t.gas_spent_week = U128(0);
+        }
+        require!(t.gas_spent_week.0 + amount <= t.gas_week_cap.0, "weekly gas refill cap reached");
+        t.gas_spent_week = U128(t.gas_spent_week.0 + amount);
+        t.gas_reserve = U128(t.gas_reserve.0 - amount);
+        emit("gas_refilled", serde_json::json!({ "to": self.agent, "amount": U128(amount), "gas_reserve": t.gas_reserve, "spent_this_week": t.gas_spent_week }));
+        Promise::new(self.agent.clone()).transfer(NearToken::from_yoctonear(amount))
+    }
+
+    pub fn withdraw_gas_reserve(&mut self, amount: U128) -> Promise {
+        self.assert_owner();
+        require!(amount.0 > 0 && amount.0 <= self.treasury.gas_reserve.0, "amount exceeds the gas reserve");
+        self.treasury.gas_reserve = U128(self.treasury.gas_reserve.0 - amount.0);
+        emit("gas_reserve_withdrawn", serde_json::json!({ "amount": amount, "to": self.owner }));
+        Promise::new(self.owner.clone()).transfer(NearToken::from_yoctonear(amount.0))
+    }
+
+    /// Owner takes USDC out of the business reserve. Restored if the transfer fails.
+    pub fn withdraw_reserve(&mut self, amount: U128) -> Promise {
+        self.assert_owner();
+        require!(amount.0 > 0 && amount.0 <= self.treasury.reserve_balance.0, "amount exceeds the reserve");
+        self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 - amount.0);
+        ext_ft::ext(self.token_id.clone())
+            .with_attached_deposit(ONE_YOCTO)
+            .with_static_gas(FT_TRANSFER_GAS)
+            .ft_transfer(self.owner_payout.clone(), amount, Some("buffer:reserve-withdrawal".into()))
+            .then(Self::ext(env::current_account_id()).with_static_gas(CALLBACK_GAS).on_reserve_withdrawn(amount))
+    }
+
+    #[private]
+    pub fn on_reserve_withdrawn(&mut self, amount: U128, #[callback_result] result: Result<(), PromiseError>) {
+        if result.is_ok() {
+            emit("reserve_withdrawn", serde_json::json!({ "amount": amount, "to": self.owner_payout }));
+        } else {
+            self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 + amount.0);
+            emit("reserve_withdrawal_failed", serde_json::json!({ "amount": amount }));
+        }
     }
 
     pub fn set_policy_hash(&mut self, version: u32, hash: String) {
@@ -814,18 +932,26 @@ impl Contract {
         let reimbursable = inference.checked_add(evm_paid).expect("claim overflow");
         let split = compute_split(order.gross.0, product.max_expense.0, self.contributor_bps, order.vendor_paid(), reimbursable);
 
+        // Business reserve comes out of the owner's share only.
+        let reserve = reserve_cut(split.owner, self.treasury.reserve_bps, self.treasury.reserve_target.0, self.treasury.reserve_balance.0);
+        self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 + reserve);
         let candidates = [
-            (LegKind::Owner, self.owner_payout.clone(), split.owner),
+            (LegKind::Owner, self.owner_payout.clone(), split.owner - reserve),
             (LegKind::Contributor, self.contributor.clone(), split.contributor),
             (LegKind::ReimbOwner, self.owner_payout.clone(), split.reimb_owner),
+            (LegKind::Reserve, env::current_account_id(), reserve),
         ];
         order.legs = candidates
             .into_iter()
             .filter(|(_, _, amt)| *amt > 0)
-            .map(|(kind, recipient, amt)| Leg { kind, recipient, amount: U128(amt), status: LegStatus::Pending, attempts: 1 })
+            .map(|(kind, recipient, amt)| {
+                // The reserve leg never leaves the contract, so it is settled the moment it is counted.
+                let status = if kind == LegKind::Reserve { LegStatus::Confirmed } else { LegStatus::Pending };
+                Leg { kind, recipient, amount: U128(amt), status, attempts: 1 }
+            })
             .collect();
         require!(!order.legs.is_empty(), "nothing to distribute");
-        order.state = OrderState::Settling;
+        order.state = if order.legs.iter().all(|l| l.status == LegStatus::Confirmed) { OrderState::Settled } else { OrderState::Settling };
         order.expenses_counted = U128(split.expenses);
         order.claims = claims;
         let legs = order.legs.clone();
@@ -837,10 +963,13 @@ impl Contract {
             "distributable": U128(split.distributable), "owner": U128(split.owner),
             "contributor": U128(split.contributor), "reimb_owner": U128(split.reimb_owner),
             "contributor_bps": self.contributor_bps, "evm_paid": U128(evm_paid),
+            "reserve_kept": U128(reserve), "reserve_balance": self.treasury.reserve_balance,
         }));
 
         for (i, leg) in legs.iter().enumerate() {
-            self.send_leg(&order_id, i as u32, leg).detach();
+            if leg.status == LegStatus::Pending {
+                self.send_leg(&order_id, i as u32, leg).detach();
+            }
         }
     }
 
@@ -884,13 +1013,17 @@ impl Contract {
                 p.status = PurchaseStatus::Rejected;
             }
         }
-        let amount = order.gross.0 - order.vendor_paid() + order.refund_top_up.0;
+        let escrow = order.gross.0 - order.vendor_paid() + order.refund_top_up.0;
+        // The business reserve covers what escrow and any top-up do not.
+        let from_reserve = order.gross.0.saturating_sub(escrow).min(self.treasury.reserve_balance.0);
+        self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 - from_reserve);
+        let amount = escrow + from_reserve;
         let shortfall = order.gross.0.saturating_sub(amount);
         let leg = Leg { kind: LegKind::Refund, recipient: order.customer.clone(), amount: U128(amount), status: LegStatus::Pending, attempts: 1 };
         order.legs = vec![leg.clone()];
         order.state = OrderState::Refunding;
         self.orders.insert(order_id.clone(), order);
-        emit("refund_started", serde_json::json!({ "order_id": order_id, "amount": leg.amount, "to": leg.recipient, "shortfall": U128(shortfall) }));
+        emit("refund_started", serde_json::json!({ "order_id": order_id, "amount": leg.amount, "to": leg.recipient, "shortfall": U128(shortfall), "from_reserve": U128(from_reserve) }));
         self.send_leg(&order_id, 0, &leg)
     }
 
@@ -945,6 +1078,10 @@ impl Contract {
 
     pub fn get_vendors(&self) -> Vec<(AccountId, bool)> {
         self.vendors.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    pub fn get_treasury(&self) -> Treasury {
+        self.treasury.clone()
     }
 
     pub fn get_evm_config(&self) -> Option<EvmConfig> {

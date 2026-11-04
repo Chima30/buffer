@@ -137,3 +137,24 @@ describe("cross-chain (treasury) purchases", () => {
     expect(r.reimbOwner).toBe(0n);
   });
 });
+
+describe("business reserve (mirrors the contract tests)", async () => {
+  const { reserveCut } = await import("./revenue");
+  const inf = [exp({ id: "llm", category: "inference", amount: toUnits("0.4"), evidenceRef: "chat:1" })];
+  it("comes out of the owner's share only", () => {
+    const r = computeSettlement({ gross: toUnits("20"), maxExpense: toUnits("13"), contributorBps: 3000, expenses: inf, reserve: { bps: 1000, target: toUnits("20"), balance: 0n } });
+    expect(r.contributorShare).toBe(5_880_000n);
+    expect(r.reserveKept).toBe(1_372_000n);
+    expect(r.ownerPayout).toBe(12_348_000n);
+    expect(r.legs.reduce((a, l) => a + l.amount, 0n)).toBe(toUnits("20"));
+  });
+  it("stops at the target", () => {
+    expect(reserveCut(13_720_000n, 5000, toUnits("8"), 6_860_000n)).toBe(1_140_000n);
+    expect(reserveCut(13_720_000n, 5000, toUnits("8"), toUnits("8"))).toBe(0n);
+  });
+  it("keeps nothing without a rule", () => {
+    const r = computeSettlement({ gross: toUnits("20"), maxExpense: toUnits("13"), contributorBps: 3000, expenses: inf });
+    expect(r.reserveKept).toBe(0n);
+    expect(r.ownerPayout).toBe(r.ownerShare);
+  });
+});

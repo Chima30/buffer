@@ -20,7 +20,7 @@ The first business is the **Verified Research Desk**. It sells short research br
    ```
    It re-reads the payment, every purchase (including the Sepolia transfer and its MPC signature), the report hash, the 70/30 settlement math, the TEE signatures and NVIDIA's GPU verdict. Then it prints PASS or FAIL for each.
 3. **Attacks.** Open [/security](https://buffer-zeta.vercel.app/security). We ran seven attacks on our own live business: prompt injection from a customer, injection hidden in a vendor's data, paying an attacker on NEAR and on Ethereum, moving USDC directly, rewriting the rules, and overspending. The page shows which layer stopped each one. The rejected calls are real failed transactions; follow the agent's explorer link to see them.
-4. **Owner console.** Open [/app](https://buffer-zeta.vercel.app/app). It shows totals, approvals, emergency controls (pause the contract, freeze the agent's wallet), the policy and its on-chain hash, the Ethereum treasury and refunds. Every owner action is a transaction the owner signs.
+4. **Owner console.** Open [/app](https://buffer-zeta.vercel.app/app). It shows totals, approvals, emergency controls (pause the contract, freeze the agent's wallet), the policy and its on-chain hash, the self-funding treasury and refunds. Every owner action is a transaction the owner signs.
 5. **Start a business.** Open [/new](https://buffer-zeta.vercel.app/new). Describe a business and its rules in plain English, and get its policy, hash and launch checklist. Nothing is created for you.
 
 ## What one order does
@@ -63,6 +63,17 @@ Example from a live cross-chain order: gross 20, Ethereum dataset 12, inference 
 | Chain Signatures | The contract builds the Ethereum transaction itself and asks the MPC network to sign only that. The agent never passes bytes to sign. |
 
 Rules in plain English: in the owner console, the owner describes a rule change ("purchases above $5 need my approval"). Private inference translates it into at most seven numeric fields. Code applies them, checks the result and computes the hash. Nothing changes until the owner signs the hash on-chain. The translator has no field for wallets, vendors, agent permissions or prohibitions, so it cannot change those.
+
+## Self-funding treasury
+
+The business pays its own running costs from its revenue, under rules only the owner can set (`set_treasury_rules`) and enforced by the contract:
+
+- **Business reserve.** At settlement, the contract keeps a share of the owner's 70% until the reserve reaches a target. The defaults are 10% and a 20 USDC target. The contributor's 30% is never touched. The amount kept shows as its own `Reserve` leg on the order, and `npm run verify` checks it.
+- **Refunds use the reserve first.** A customer is made whole without the owner stepping in. The owner tops up only what the reserve can't cover.
+- **Agent gas.** The owner funds a NEAR gas reserve once. When the agent's wallet drops below 1 NEAR, the agent asks the contract for a refill (default 0.5 NEAR). The contract caps refills per rolling week (default 2 NEAR), however often it's asked.
+- **Ethereum treasury.** The agent shows how much the Chain Signatures treasury needs for the next purchase. Moving USDC from NEAR to Ethereum needs NEAR Intents, which runs on mainnet only, so on testnet this is shown, not performed.
+
+Only the owner can change the rules or withdraw (`withdraw_reserve`, `withdraw_gas_reserve`). The agent can only trigger a refill, within the caps.
 
 ## Chain Signatures (Ethereum Sepolia)
 
@@ -108,7 +119,7 @@ near contract call-function as-read-only buffer-john-desk.testnet get_order json
 
 ## Stack and code
 
-- **Contract.** `contract/` is Rust with near-sdk 5. It has 48 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
+- **Contract.** `contract/` is Rust with near-sdk 5. It has 59 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
 - **App.** Next.js 16 on Vercel with Supabase. Row-level security denies all public access, the ledger is append-only, and job leases use `FOR UPDATE SKIP LOCKED`. Supabase Cron calls `/api/runtime/tick` every minute.
 - **Deterministic core.** `src/lib/domain/` holds the policy engine, the revenue mirror of the contract formula, the order state machine and the policy builder's checks. Tests: `npm test`.
 - **Integrations.** `src/lib/server/` contains:

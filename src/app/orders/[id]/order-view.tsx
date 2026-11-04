@@ -53,6 +53,7 @@ const EVENT_LABELS: Record<string, string> = {
   payout_owner: "Owner share (70%)",
   payout_contributor: "Contributor share (30%)",
   payout_reimb_owner: "Expenses reimbursed to owner",
+  payout_reserve: "Kept in the business reserve",
   refund_topped_up: "Owner topped up the refund",
   refund_started: "Refund started",
   refund_paid: "Customer refunded",

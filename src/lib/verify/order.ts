@@ -208,9 +208,15 @@ export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
     ];
     const s = computeSettlement({ gross: BigInt(chain.gross), maxExpense: BigInt(cap ?? "0"), contributorBps: config.contributor_bps, expenses });
     const leg = (k: string) => BigInt(chain.legs.find((l) => l.kind === k)?.amount ?? "0");
-    const match = leg("Owner") === s.ownerShare && leg("Contributor") === s.contributorShare && leg("ReimbOwner") === s.reimbOwner && BigInt(chain.expenses_counted) === s.expensesCounted;
-    add("Settlement", "70/30 formula", match, `expenses ${s.expensesCounted}, net ${s.distributable}: owner ${s.ownerShare}, contributor ${s.contributorShare} (${config.contributor_bps / 100}%), reimbursed ${s.reimbOwner}`);
+    // The owner's share is what they were paid plus what the business reserve kept.
+    const kept = leg("Reserve");
+    const match = leg("Owner") + kept === s.ownerShare && leg("Contributor") === s.contributorShare && leg("ReimbOwner") === s.reimbOwner && BigInt(chain.expenses_counted) === s.expensesCounted;
+    add("Settlement", "70/30 formula", match, `expenses ${s.expensesCounted}, net ${s.distributable}: owner ${s.ownerShare}${kept > 0n ? ` (${kept} kept in the business reserve)` : ""}, contributor ${s.contributorShare} (${config.contributor_bps / 100}%), reimbursed ${s.reimbOwner}`);
     const sum = s.paidToVendors + s.reimbOwner + s.contributorShare + s.ownerShare;
+    if (kept > 0n) {
+      const t = await view<{ reserve_bps: number }>(near, pub.contractId, "get_treasury").catch(() => null);
+      add("Settlement", "reserve within the owner's rule", t ? kept <= (s.ownerShare * BigInt(t.reserve_bps)) / 10000n : null, t ? `kept ${kept} of ${s.ownerShare} at the current ${t.reserve_bps / 100}% rule` : "No treasury rules readable");
+    }
     add("Settlement", "parts add up to the payment", sum === BigInt(chain.gross), `${sum} = ${chain.gross}`);
     const allConfirmed = chain.legs.every((l) => l.status === "Confirmed");
     add("Settlement", "payouts confirmed on-chain", allConfirmed, chain.legs.map((l) => `${l.kind} ${l.amount} -> ${l.recipient}: ${l.status}`).join("; "));

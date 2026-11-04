@@ -13,7 +13,12 @@ interface Overview {
   pendingPolicy: { version: number; hash: string; sourceText: string | null; createdAt: string | null; commands: OwnerCommand[] } | null;
   policyAnchored: boolean;
   agent: { id: string; name: string; role: string; near_account: string; status: "running" | "paused" | "frozen"; walletPubkey: string | null } | null;
-  totals: { revenue: string; vendorSpend: string; inferenceSpend: string; net: string; ownerPaid: string; contributorPaid: string };
+  totals: { revenue: string; vendorSpend: string; inferenceSpend: string; net: string; ownerPaid: string; contributorPaid: string; reserveKept: string };
+  businessTreasury: {
+    reserve_bps: number; reserve_target: string; reserve_balance: string; gas_reserve: string; gas_refill_amount: string; gas_week_cap: string; gas_spent_week: string;
+    agentGasYocto: string | null; ethereumShortfall: string;
+    refills: { tx_hash: string; explorer_url: string; details: { amount_yocto?: string }; at: string }[];
+  } | null;
   pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; chain: "near" | "sepolia"; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string | null; evm_address: string | null } }[];
   treasury: { address: string; eth: string; usdc: string; explorerUrl: string } | null;
   alerts: string[];
@@ -39,10 +44,15 @@ const VALUE_LABELS: Record<string, [string, string]> = {
 };
 
 /** near-cli command for Windows PowerShell; --% keeps the JSON quotes intact. */
-function cliCommand(contractId: string, method: string, args: Record<string, unknown>, signer: string, gas = "100 Tgas") {
+function cliCommand(contractId: string, method: string, args: Record<string, unknown>, signer: string, gas = "100 Tgas", deposit = "0 NEAR") {
   const json = JSON.stringify(args).replace(/"/g, '\\"');
-  return `near --% contract call-function as-transaction ${contractId} ${method} json-args "${json}" prepaid-gas "${gas}" attached-deposit "0 NEAR" sign-as ${signer} network-config testnet sign-with-keychain send`;
+  return `near --% contract call-function as-transaction ${contractId} ${method} json-args "${json}" prepaid-gas "${gas}" attached-deposit "${deposit}" sign-as ${signer} network-config testnet sign-with-keychain send`;
 }
+
+const yocto = (v: string | null | undefined) => (v ? Number(BigInt(v) / 10n ** 21n) / 1000 : 0);
+const NEAR_YOCTO = (n: number) => (BigInt(Math.round(n * 1000)) * 10n ** 21n).toString();
+/** Starting rules for the self-funding treasury; the owner can change them. */
+const TREASURY_DEFAULTS = { reserve_bps: 1000, reserve_target: "20000000", gas_refill_amount: NEAR_YOCTO(0.5), gas_week_cap: NEAR_YOCTO(2) };
 
 export default function OwnerConsole() {
   const wallet = useNearWallet();
@@ -139,8 +149,8 @@ export default function OwnerConsole() {
         <>
           <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
             {(() => {
-              const r = BigInt(data.totals.revenue), v = BigInt(data.totals.vendorSpend), ai = BigInt(data.totals.inferenceSpend), c = BigInt(data.totals.contributorPaid);
-              const owner = r - v - ai - c;
+              const r = BigInt(data.totals.revenue), v = BigInt(data.totals.vendorSpend), ai = BigInt(data.totals.inferenceSpend), c = BigInt(data.totals.contributorPaid), kept = BigInt(data.totals.reserveKept ?? "0");
+              const owner = r - v - ai - c - kept;
               if (r <= 0n || owner < 0n) return null;
               return (
                 <MoneyFlow
@@ -149,7 +159,7 @@ export default function OwnerConsole() {
                   caption={<>Net revenue is split {100 - data.contract.contributorBps / 100}/{data.contract.contributorBps / 100} between owner and contributor, after costs</>}
                   groups={[
                     { label: "Costs", leaves: [{ label: "Data vendors", units: v, color: "chain" }, { label: "AI inference", units: ai, color: "ai" }] },
-                    { label: "Net revenue", leaves: [{ label: "Owner", units: owner, color: "owner", note: "Includes orders not settled yet" }, { label: "Contributor", units: c, color: "contrib" }] },
+                    { label: "Net revenue", leaves: [{ label: "Owner", units: owner, color: "owner", note: "Includes orders not settled yet" }, { label: "Contributor", units: c, color: "contrib" }, ...(kept > 0n ? [{ label: "Business reserve", units: kept, color: "vendor" as const, note: "Kept to pay the business's own bills" }] : [])] },
                   ]}
                 />
               );
@@ -332,16 +342,64 @@ export default function OwnerConsole() {
                 <PolicyBuilder onDrafted={load} />
               </Card>
 
-              {data.treasury && (
-                <Card title="Ethereum treasury (Chain Signatures)">
-                  <p className="text-xs text-ink-2">Controlled by the business contract through NEAR&apos;s MPC network. No one holds its private key; the contract signs only USDC transfers to approved vendors.</p>
-                  <a href={data.treasury.explorerUrl} target="_blank" rel="noreferrer" className="mt-2 block break-all font-mono text-xs text-accent">{data.treasury.address} ↗</a>
-                  <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-sm">
-                    <dt className="text-ink-3">USDC</dt><dd className="text-right"><Money units={data.treasury.usdc} /></dd>
-                    <dt className="text-ink-3">Gas</dt><dd className="text-right font-mono tabular">{(Number(BigInt(data.treasury.eth) / 10n ** 12n) / 1e6).toFixed(4)} <span className="text-ink-3">ETH</span></dd>
-                  </dl>
-                </Card>
-              )}
+              <Card title="Treasury">
+                {!data.businessTreasury ? (
+                  <p className="text-sm text-ink-3">The self-funding treasury needs the latest contract upgrade.</p>
+                ) : (
+                  (() => {
+                    const t = data.businessTreasury;
+                    const rulesOn = t.reserve_bps > 0 || BigInt(t.gas_refill_amount) > 0n;
+                    return (
+                      <div className="space-y-5 text-sm">
+                        <p className="text-ink-2">The business pays its own bills from its revenue, under your rules. Only you can change them or withdraw.</p>
+                        <div>
+                          <div className="flex items-baseline justify-between"><span className="font-medium">Business reserve</span><Money units={t.reserve_balance} /></div>
+                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-raised">
+                            <div className="h-full rounded-full bg-[var(--flow-vendor)] transition-transform duration-500" style={{ width: `${Math.min(100, BigInt(t.reserve_target) > 0n ? Number((BigInt(t.reserve_balance) * 1000n) / BigInt(t.reserve_target)) / 10 : 0)}%` }} />
+                          </div>
+                          <p className="mt-1.5 text-xs text-ink-3">{t.reserve_bps > 0 ? <>Keeps {t.reserve_bps / 100}% of your share until it holds <Money units={t.reserve_target} />. Pays refunds first</> : "Not keeping anything yet"}</p>
+                        </div>
+                        <div>
+                          <div className="flex items-baseline justify-between"><span className="font-medium">Agent gas</span><span className="font-mono tabular">{yocto(t.agentGasYocto).toFixed(3)} <span className="text-xs text-ink-3">NEAR</span></span></div>
+                          <p className="mt-1 text-xs text-ink-3">
+                            {BigInt(t.gas_refill_amount) > 0n
+                              ? <>Refills {yocto(t.gas_refill_amount)} NEAR below 1 NEAR, at most {yocto(t.gas_week_cap)} a week ({yocto(t.gas_spent_week)} used). Gas reserve {yocto(t.gas_reserve).toFixed(3)} NEAR</>
+                              : "Automatic refills are off"}
+                          </p>
+                          {t.refills.length > 0 && (
+                            <ul className="mt-2 space-y-1">
+                              {t.refills.map((r) => (
+                                <li key={r.tx_hash} className="flex justify-between font-mono text-xs text-ink-3">
+                                  <span>{r.at.replace("T", " ").slice(5, 16)} · {yocto(r.details.amount_yocto ?? "0")} NEAR</span>
+                                  <a href={r.explorer_url} target="_blank" rel="noreferrer" className="text-accent">tx {r.tx_hash.slice(0, 8)}… ↗</a>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                        {data.treasury && (
+                          <div>
+                            <div className="flex items-baseline justify-between"><span className="font-medium">Ethereum treasury</span><Money units={data.treasury.usdc} /></div>
+                            <a href={data.treasury.explorerUrl} target="_blank" rel="noreferrer" className="mt-1 block break-all font-mono text-xs text-accent">{data.treasury.address} ↗</a>
+                            <p className="mt-1 text-xs text-ink-3">
+                              {(Number(BigInt(data.treasury.eth) / 10n ** 12n) / 1e6).toFixed(4)} ETH for gas. Signed only by the contract through Chain Signatures.
+                              {BigInt(t.ethereumShortfall) > 0n && <> Needs <Money units={t.ethereumShortfall} /> more for the next purchase; moving USDC from NEAR to Ethereum uses NEAR Intents, which runs on mainnet only.</>}
+                            </p>
+                          </div>
+                        )}
+                        <div className="space-y-1 border-t border-rule pt-3">
+                          {!rulesOn && <p className="text-xs text-ink-2">Turn it on: keep 10% of your share up to 20 USDC, refill the agent 0.5 NEAR at a time, at most 2 NEAR a week.</p>}
+                          <CliFallback label={rulesOn ? "Change the rules" : "Turn on the self-funding treasury"} command={cliCommand(data.contract.id, "set_treasury_rules", TREASURY_DEFAULTS, data.contract.owner, "30 Tgas")} busy={!!busy} onSubmit={(h) => recordPasted("Treasury rules", h)} />
+                          <CliFallback label="Fund the gas reserve with 3 NEAR" command={cliCommand(data.contract.id, "fund_gas_reserve", {}, data.contract.owner, "30 Tgas", "3 NEAR")} busy={!!busy} onSubmit={(h) => recordPasted("Gas reserve", h)} />
+                          {BigInt(t.reserve_balance) > 0n && (
+                            <CliFallback label="Withdraw the business reserve" command={cliCommand(data.contract.id, "withdraw_reserve", { amount: t.reserve_balance }, data.contract.owner, "100 Tgas")} busy={!!busy} onSubmit={(h) => recordPasted("Reserve withdrawal", h)} />
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()
+                )}
+              </Card>
 
               <Card title="Agent">
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
