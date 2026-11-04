@@ -53,7 +53,7 @@ const EVENT_LABELS: Record<string, string> = {
   order_fulfilled: "Report delivered, hash recorded on-chain",
   payout_owner: "Owner share (70%)",
   payout_contributor: "Contributor share (30%)",
-  payout_reimb_owner: "Inference cost reimbursed to owner",
+  payout_reimb_owner: "Expenses reimbursed to owner",
 };
 
 // Browser-only values, read without effects. The order token lives in the URL fragment.
@@ -297,6 +297,12 @@ function Ledger({ entries }: { entries: OrderData["ledger"] }) {
                 <span className="truncate">{e.counterparty ?? ""}</span>
                 {e.amount_units && <Money units={e.amount_units} />}
               </div>
+              {e.event_type === "payout_reimb_owner" && typeof e.details?.treasury_units === "string" && (
+                <span className="text-xs text-ink-3">
+                  {BigInt(e.details.treasury_units) > 0n && <>Ethereum treasury <Money units={e.details.treasury_units} /> · </>}
+                  inference <Money units={String(e.details.inference_units ?? "0")} />
+                </span>
+              )}
               {e.explorer_url && <a href={e.explorer_url} target="_blank" rel="noreferrer" className="font-mono text-xs text-accent">tx {e.tx_hash?.slice(0, 10)}… ↗</a>}
             </li>
             );

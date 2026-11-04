@@ -289,6 +289,7 @@ export default function OwnerConsole() {
                   </div>
                 )}
 
+                <RecordTx label="Record a policy transaction" busy={!!busy} onSubmit={(h) => recordPasted("Policy", h)} />
                 <PolicyBuilder onDrafted={load} />
               </Card>
 
@@ -378,6 +379,26 @@ function PolicyBuilder({ onDrafted }: { onDrafted: () => Promise<void> }) {
         </div>
       )}
     </div>
+  );
+}
+
+/** Always available: record any owner transaction signed elsewhere (it is verified on-chain first). */
+function RecordTx({ label, busy, onSubmit }: { label: string; busy: boolean; onSubmit: (txHash: string) => void }) {
+  const [hash, setHash] = useState("");
+  return (
+    <details className="mt-3 rounded-md border border-rule p-3">
+      <summary className="cursor-pointer text-xs text-ink-2">{label}</summary>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (hash.trim()) onSubmit(hash);
+        }}
+        className="mt-2 flex flex-col gap-2 sm:flex-row"
+      >
+        <input value={hash} onChange={(e) => setHash(e.target.value)} placeholder="Paste the Transaction ID" className="flex-1 rounded-md border border-rule-strong bg-paper p-1.5 font-mono text-xs" />
+        <button disabled={busy} className="rounded-md border border-rule-strong px-3 py-1.5 text-xs disabled:opacity-40">Record</button>
+      </form>
+    </details>
   );
 }
 

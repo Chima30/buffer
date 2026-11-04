@@ -403,6 +403,11 @@ async function recordSettlement(order: OrderRow, txHash: string, preview: Return
     await audit(order.business_id, "runtime", "reconciliation_mismatch", order.id, { preview: { owner: preview.ownerShare.toString(), contributor: preview.contributorShare.toString() }, onchain: row });
   }
   const kindToLeg: Record<string, string> = { Owner: "owner", Contributor: "contributor", ReimbOwner: "reimb_owner" };
+  // What the owner's reimbursement is for: the Ethereum treasury purchases first, then inference.
+  const treasuryPaid = (await getEvmPurchases(order.onchain_order_id).catch(() => [])).filter((p) => p.status === "Signed").reduce((a, p) => a + BigInt(p.amount), 0n);
+  const reimb = leg("ReimbOwner");
+  const reimbTreasury = treasuryPaid < reimb ? treasuryPaid : reimb;
+  const reimbBreakdown = { treasury_units: reimbTreasury.toString(), inference_units: (reimb - reimbTreasury).toString() };
   for (const l of onchain.legs) {
     const status = l.status === "Confirmed" ? "CONFIRMED" : l.status === "Failed" ? "FAILED" : "SUBMITTED";
     await db().from("distributions").upsert({ order_id: order.id, leg: kindToLeg[l.kind], recipient: l.recipient, amount_units: l.amount, status, tx_hash: txHash, attempts: l.attempts }, { onConflict: "order_id,leg" });
@@ -415,6 +420,7 @@ async function recordSettlement(order: OrderRow, txHash: string, preview: Return
       counterparty: l.recipient,
       txHash: l.status === "Confirmed" ? txHash : null,
       verifiedOnChain: l.status === "Confirmed",
+      details: l.kind === "ReimbOwner" ? reimbBreakdown : undefined,
     });
   }
 }

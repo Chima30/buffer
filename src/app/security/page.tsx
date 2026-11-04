@@ -79,7 +79,10 @@ export default function SecurityPage() {
               {blocked} of {run.results.length} attacks blocked
             </h2>
             <p className="font-mono text-xs text-ink-3">
-              run {run.id} · {run.finishedAt.replace("T", " ").slice(0, 19)} UTC · agent {run.agentAccount.slice(0, 10)}…
+              run {run.id} · {run.finishedAt.replace("T", " ").slice(0, 19)} UTC · agent{" "}
+              <a href={`https://testnet.nearblocks.io/address/${run.agentAccount}`} target="_blank" rel="noreferrer" className="text-accent" title="See every call the agent made, including the rejected attacks">
+                {run.agentAccount.slice(0, 10)}… ↗
+              </a>
             </p>
           </div>
           <div className="mt-4 space-y-4">
