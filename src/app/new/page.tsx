@@ -37,7 +37,7 @@ export default function NewBusinessPage() {
   const wallet = useNearWallet();
   const [pendingBuild, setPendingBuild] = useState(false);
   // The connected wallet is the owner unless the user typed another account.
-  const owner = form.owner ?? wallet.signedAccountId ?? "";
+  const owner = form.owner?.trim() || wallet.signedAccountId || "";
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -123,6 +123,9 @@ export default function NewBusinessPage() {
         </label>
         {error && <p role="alert" className="rounded-md bg-failed-soft p-3 text-sm text-failed sm:col-span-2">{error}</p>}
         <button disabled={busy} className="rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-paper disabled:opacity-60 sm:col-span-2">{busy ? "Building the plan…" : pendingBuild ? "Waiting for your wallet…" : wallet.signedAccountId ? "Build the plan" : "Connect wallet and build the plan"}</button>
+        <p className="-mt-2 text-xs text-ink-3 sm:col-span-2">
+          {wallet.signedAccountId ? `Connected as ${wallet.signedAccountId}. Building the plan signs nothing.` : "You'll be asked to connect a NEAR testnet wallet first."}
+        </p>
       </form>
 
       {draft && (

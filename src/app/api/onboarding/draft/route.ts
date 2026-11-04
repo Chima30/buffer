@@ -12,7 +12,7 @@ import { rateLimit } from "@/lib/server/rate-limit";
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const limited = await rateLimit(req, "onboarding", 10, 3600);
+  const limited = await rateLimit(req, "onboarding", 30, 3600);
   if (limited) return limited;
   const parsed = businessDraftInput.safeParse(await req.json().catch(() => ({})));
   if (!parsed.success) {
