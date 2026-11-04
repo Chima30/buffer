@@ -447,3 +447,157 @@ fn policy_hash_versions_must_increase() {
     }));
     assert!(r.is_err());
 }
+
+// ---------- cross-chain purchases (Chain Signatures) ----------
+
+const EVM_VENDOR: &str = "0x00000000000000000000000000000000000000aa";
+const ATTACKER_EVM: &str = "0x00000000000000000000000000000000000000ee";
+const GWEI: u128 = 1_000_000_000;
+
+fn evm_setup() -> Contract {
+    let mut c = setup();
+    as_owner(|| {
+        c.set_evm_config(EvmConfig {
+            mpc_contract: acct("v1.signer-prod.testnet"),
+            chain_id: 11155111,
+            usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238".into(),
+            max_fee_per_gas_cap: U128(100 * GWEI),
+            gas_limit: 100_000,
+        });
+        c.set_evm_vendor(EVM_VENDOR.to_uppercase().replace("0X", "0x"), true);
+    });
+    pay(&mut c, "o-1", 20 * USDC);
+    c
+}
+
+fn evm_request(c: &mut Contract, vendor: &str, amount: u128, fee: u128) -> PromiseOrValue<u32> {
+    as_agent(|| c.request_evm_purchase("o-1".into(), vendor.into(), U128(amount), U128(fee), U128(GWEI)))
+}
+
+fn mpc_reply(c: &mut Contract, idx: u32, ok: bool) {
+    testing_env!(ctx(contract_id()).build());
+    let v = serde_json::json!({ "scheme": "Secp256k1", "big_r": { "affine_point": format!("02{}", "11".repeat(32)) }, "s": { "scalar": "22".repeat(32) }, "recovery_id": 1 });
+    c.on_evm_signed("o-1".into(), idx, if ok { Ok(v) } else { Err(PromiseError::Failed) });
+}
+
+#[test]
+fn small_evm_purchase_is_built_and_sent_for_signing() {
+    let mut c = evm_setup();
+    assert!(matches!(evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI), PromiseOrValue::Promise(_)));
+    let p = &c.get_evm_purchases("o-1".into())[0];
+    assert_eq!(p.status, EvmPurchaseStatus::Signing);
+    assert_eq!(p.nonce, Some(0));
+    assert_eq!(c.get_evm_nonce(), 1);
+    // The hash the MPC signs is keccak256 of the transaction the contract built.
+    let tx = c.get_evm_unsigned_tx("o-1".into(), 0).unwrap();
+    let bytes: Vec<u8> = (0..tx.len()).step_by(2).map(|i| u8::from_str_radix(&tx[i..i + 2], 16).unwrap()).collect();
+    assert_eq!(p.payload_hash.clone().unwrap(), evm::to_hex(&env::keccak256(&bytes)));
+    assert!(tx.contains("a9059cbb00000000000000000000000000000000000000000000000000000000000000aa"));
+    mpc_reply(&mut c, 0, true);
+    let p = &c.get_evm_purchases("o-1".into())[0];
+    assert_eq!(p.status, EvmPurchaseStatus::Signed);
+    assert_eq!(p.signature.as_ref().unwrap().recovery_id, 1);
+}
+
+#[test]
+#[should_panic(expected = "evm vendor is not approved")]
+fn evm_attacker_address_is_refused() {
+    let mut c = evm_setup();
+    let _ = evm_request(&mut c, ATTACKER_EVM, 5 * USDC, 30 * GWEI);
+}
+
+#[test]
+#[should_panic(expected = "max_fee_per_gas above the owner's cap")]
+fn evm_gas_fee_is_capped() {
+    let mut c = evm_setup();
+    let _ = evm_request(&mut c, EVM_VENDOR, 5 * USDC, 101 * GWEI);
+}
+
+#[test]
+#[should_panic(expected = "agent only")]
+fn owner_path_cannot_be_used_by_strangers_to_request() {
+    let mut c = evm_setup();
+    testing_env!(ctx(acct("mallory.testnet")).build());
+    let _ = c.request_evm_purchase("o-1".into(), EVM_VENDOR.into(), U128(USDC), U128(GWEI), U128(GWEI));
+}
+
+#[test]
+#[should_panic(expected = "owner only")]
+fn agent_cannot_approve_evm_vendors() {
+    let mut c = evm_setup();
+    as_agent(|| c.set_evm_vendor(ATTACKER_EVM.into(), true));
+}
+
+#[test]
+fn large_evm_purchase_waits_for_the_owner_and_nonce_is_assigned_on_approval() {
+    let mut c = evm_setup();
+    assert!(matches!(evm_request(&mut c, EVM_VENDOR, 12 * USDC, 30 * GWEI), PromiseOrValue::Value(0)));
+    let p = &c.get_evm_purchases("o-1".into())[0];
+    assert_eq!((p.status.clone(), p.nonce), (EvmPurchaseStatus::AwaitingApproval, None));
+    assert_eq!(c.get_evm_nonce(), 0);
+    let _ = as_owner(|| c.approve_evm_purchase("o-1".into(), 0));
+    assert_eq!(c.get_evm_purchases("o-1".into())[0].nonce, Some(0));
+}
+
+#[test]
+#[should_panic(expected = "purchase exceeds the order's expense cap")]
+fn near_and_evm_purchases_share_the_cap() {
+    let mut c = evm_setup();
+    let _ = as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(8 * USDC), "a".into()));
+    let _ = evm_request(&mut c, EVM_VENDOR, 6 * USDC, 30 * GWEI); // 8 + 6 > 13
+}
+
+#[test]
+fn failed_signature_returns_the_nonce_and_frees_the_cap() {
+    let mut c = evm_setup();
+    let _ = evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI);
+    mpc_reply(&mut c, 0, false);
+    assert_eq!(c.get_evm_purchases("o-1".into())[0].status, EvmPurchaseStatus::Failed);
+    assert_eq!(c.get_evm_nonce(), 0);
+    let _ = evm_request(&mut c, EVM_VENDOR, 10 * USDC, 30 * GWEI);
+    assert_eq!(c.get_evm_purchases("o-1".into())[1].nonce, Some(0));
+}
+
+#[test]
+#[should_panic(expected = "a cross-chain purchase is still open")]
+fn cannot_fulfil_while_signing() {
+    let mut c = evm_setup();
+    let _ = evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI);
+    as_agent(|| c.mark_fulfilled("o-1".into(), "ab".repeat(32)));
+}
+
+#[test]
+fn settlement_reimburses_the_owner_for_signed_evm_purchases() {
+    let mut c = evm_setup();
+    let _ = evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI);
+    mpc_reply(&mut c, 0, true);
+    as_agent(|| c.mark_fulfilled("o-1".into(), "ab".repeat(32)));
+    as_agent(|| c.settle("o-1".into(), inference(1_000)));
+    let o = c.get_order("o-1".into()).unwrap();
+    let amt = |k: LegKind| o.legs.iter().find(|l| l.kind == k).map(|l| l.amount.0).unwrap_or(0);
+    // E = 5 + 0.001 = 5.001; D = 14.999; C = 4.4997; O = 10.4993; reimb = 5.001
+    assert_eq!(amt(LegKind::ReimbOwner), 5_001_000);
+    assert_eq!(amt(LegKind::Contributor), 4_499_700);
+    assert_eq!(amt(LegKind::Owner), 10_499_300);
+    assert_eq!(amt(LegKind::ReimbOwner) + amt(LegKind::Contributor) + amt(LegKind::Owner), 20 * USDC);
+}
+
+#[test]
+fn migrate_keeps_existing_state() {
+    let mut c = setup();
+    pay(&mut c, "o-old", 20 * USDC);
+    c.products.flush();
+    c.vendors.flush();
+    c.orders.flush();
+    // Rebuild the pre-upgrade layout from the same collections, write it, then migrate.
+    let Contract { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, products, vendors, orders, .. } = c;
+    let v1 = ContractV1 { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, policy_version: 3, policy_hash: Some("ab".repeat(32)), products, vendors, orders };
+    env::state_write(&v1);
+    testing_env!(ctx(contract_id()).build());
+    let m = Contract::migrate();
+    assert_eq!(m.get_config().policy_version, 3);
+    assert_eq!(m.get_order("o-old".into()).unwrap().state, OrderState::Paid);
+    assert_eq!(m.get_products().len(), 1);
+    assert!(m.get_evm_config().is_none());
+    assert_eq!(m.get_evm_nonce(), 0);
+}

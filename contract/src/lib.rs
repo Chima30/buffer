@@ -19,6 +19,18 @@
 //! expense cap; above the approval threshold the owner must approve that exact
 //! purchase), mark orders fulfilled and request settlement. It cannot change
 //! config, the split, recipients, vendors, products, the policy hash or the pause.
+//!
+//! Cross-chain purchases (Chain Signatures): the contract owns an Ethereum
+//! treasury address derived by the NEAR MPC network. For an EVM purchase the
+//! contract itself builds the EIP-1559 USDC transfer to an owner-approved EVM
+//! vendor and asks the MPC network to sign its hash; the agent supplies only the
+//! order, vendor, amount and capped gas fees, never bytes to sign. The owner
+//! funds the treasury, so EVM purchase amounts are reimbursed to the owner at
+//! settlement, inside the same expense cap:
+//!   E  = min(V + X + I, product.max_expense, gross),  X = signed EVM purchases
+//!   reimb_owner = E - V
+
+pub mod evm;
 
 use near_sdk::json_types::U128;
 use near_sdk::serde::Deserialize;
@@ -36,11 +48,32 @@ const MAX_ID_LEN: usize = 64;
 const MAX_CLAIMS: usize = 16;
 const MAX_PURCHASES: usize = 8;
 const MAX_REF_LEN: usize = 128;
+const MPC_SIGN_GAS: Gas = Gas::from_tgas(50);
+const SIGN_CALLBACK_GAS: Gas = Gas::from_tgas(10);
+pub const EVM_TREASURY_PATH: &str = "buffer-treasury";
 
 #[ext_contract(ext_ft)]
 #[allow(dead_code)]
 trait FungibleToken {
     fn ft_transfer(&mut self, receiver_id: AccountId, amount: U128, memo: Option<String>);
+}
+
+#[near(serializers = [json])]
+pub enum MpcPayload {
+    Ecdsa(String),
+}
+
+#[near(serializers = [json])]
+pub struct MpcSignRequest {
+    pub path: String,
+    pub payload_v2: MpcPayload,
+    pub domain_id: u64,
+}
+
+#[ext_contract(ext_mpc)]
+#[allow(dead_code)]
+trait MpcSigner {
+    fn sign(&mut self, request: MpcSignRequest);
 }
 
 #[near]
@@ -49,6 +82,9 @@ enum StorageKey {
     Products,
     Orders,
     Vendors,
+    // Appended in the cross-chain upgrade; never reorder.
+    EvmVendors,
+    EvmPurchases,
 }
 
 #[near(serializers = [json, borsh])]
@@ -166,6 +202,67 @@ impl Order {
     }
 }
 
+/// Owner-set Ethereum settings for cross-chain purchases.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvmConfig {
+    pub mpc_contract: AccountId,
+    pub chain_id: u64,
+    /// ERC-20 USDC contract on that chain ("0x" + 40 hex).
+    pub usdc: String,
+    /// Upper bound the agent may offer per gas unit, in wei.
+    pub max_fee_per_gas_cap: U128,
+    pub gas_limit: u64,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub enum EvmPurchaseStatus {
+    AwaitingApproval,
+    Signing,
+    /// Signature returned: treated as spent from here on.
+    Signed,
+    Failed,
+    Rejected,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvmSignature {
+    /// Compressed R point, hex (33 bytes).
+    pub big_r: String,
+    /// s scalar, hex (32 bytes).
+    pub s: String,
+    pub recovery_id: u8,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvmPurchase {
+    pub vendor: String,
+    pub amount: U128,
+    pub chain_id: u64,
+    pub token: String,
+    pub gas_limit: u64,
+    pub max_fee_per_gas: U128,
+    pub max_priority_fee_per_gas: U128,
+    /// Assigned when signing starts.
+    pub nonce: Option<u64>,
+    /// keccak256 of the unsigned transaction, hex; set when signing starts.
+    pub payload_hash: Option<String>,
+    pub status: EvmPurchaseStatus,
+    pub signature: Option<EvmSignature>,
+}
+
+impl EvmPurchase {
+    fn committed(&self) -> bool {
+        matches!(self.status, EvmPurchaseStatus::AwaitingApproval | EvmPurchaseStatus::Signing | EvmPurchaseStatus::Signed)
+    }
+    fn open(&self) -> bool {
+        matches!(self.status, EvmPurchaseStatus::AwaitingApproval | EvmPurchaseStatus::Signing)
+    }
+}
+
 #[near(serializers = [json])]
 #[derive(Clone, Debug, PartialEq)]
 pub struct Config {
@@ -236,6 +333,30 @@ pub struct Contract {
     products: IterableMap<String, Product>,
     vendors: IterableMap<AccountId, bool>,
     orders: LookupMap<String, Order>,
+    // ---- cross-chain upgrade (appended; see `migrate`) ----
+    evm: Option<EvmConfig>,
+    evm_vendors: IterableMap<String, bool>,
+    evm_purchases: LookupMap<String, Vec<EvmPurchase>>,
+    evm_nonce: u64,
+}
+
+/// State layout before the cross-chain upgrade, read once by `migrate`.
+#[near(serializers = [borsh])]
+struct ContractV1 {
+    owner: AccountId,
+    agent: AccountId,
+    token_id: AccountId,
+    owner_payout: AccountId,
+    contributor: AccountId,
+    contributor_bps: u16,
+    purchase_approval_above: U128,
+    order_ttl_ns: u64,
+    paused: bool,
+    policy_version: u32,
+    policy_hash: Option<String>,
+    products: IterableMap<String, Product>,
+    vendors: IterableMap<AccountId, bool>,
+    orders: LookupMap<String, Order>,
 }
 
 fn emit(event: &str, data: serde_json::Value) {
@@ -278,9 +399,42 @@ impl Contract {
             products: IterableMap::new(StorageKey::Products),
             vendors: IterableMap::new(StorageKey::Vendors),
             orders: LookupMap::new(StorageKey::Orders),
+            evm: None,
+            evm_vendors: IterableMap::new(StorageKey::EvmVendors),
+            evm_purchases: LookupMap::new(StorageKey::EvmPurchases),
+            evm_nonce: 0,
         };
         c.assert_config_valid();
         c
+    }
+
+    /// One-time upgrade from the pre-cross-chain layout. Keeps every existing
+    /// field, order and settlement; adds empty cross-chain state.
+    #[private]
+    #[init(ignore_state)]
+    pub fn migrate() -> Self {
+        let old: ContractV1 = env::state_read().expect("no prior state");
+        emit("migrated", serde_json::json!({ "to": "cross-chain" }));
+        Self {
+            owner: old.owner,
+            agent: old.agent,
+            token_id: old.token_id,
+            owner_payout: old.owner_payout,
+            contributor: old.contributor,
+            contributor_bps: old.contributor_bps,
+            purchase_approval_above: old.purchase_approval_above,
+            order_ttl_ns: old.order_ttl_ns,
+            paused: old.paused,
+            policy_version: old.policy_version,
+            policy_hash: old.policy_hash,
+            products: old.products,
+            vendors: old.vendors,
+            orders: old.orders,
+            evm: None,
+            evm_vendors: IterableMap::new(StorageKey::EvmVendors),
+            evm_purchases: LookupMap::new(StorageKey::EvmPurchases),
+            evm_nonce: 0,
+        }
     }
 
     // ---------- owner-only configuration ----------
@@ -326,6 +480,32 @@ impl Contract {
     }
 
     /// Anchors the sha256 of the owner-approved policy document.
+    pub fn set_evm_config(&mut self, config: EvmConfig) {
+        self.assert_owner();
+        require!(evm::parse_address(&config.usdc).is_some(), "usdc must be a 0x address");
+        require!(config.gas_limit >= 21_000 && config.gas_limit <= 500_000, "gas_limit out of range");
+        require!(config.max_fee_per_gas_cap.0 > 0, "fee cap must be positive");
+        let mut config = config;
+        config.usdc = config.usdc.to_lowercase();
+        emit("evm_config_set", serde_json::json!({ "config": config }));
+        self.evm = Some(config);
+    }
+
+    pub fn set_evm_vendor(&mut self, vendor: String, approved: bool) {
+        self.assert_owner();
+        let a = evm::parse_address(&vendor).expect("vendor must be a 0x address");
+        let key = evm::address_string(&a);
+        self.evm_vendors.insert(key.clone(), approved);
+        emit("evm_vendor_set", serde_json::json!({ "vendor": key, "approved": approved }));
+    }
+
+    /// Resync the treasury nonce, e.g. after a signed transaction was never mined.
+    pub fn set_evm_nonce(&mut self, nonce: u64) {
+        self.assert_owner();
+        self.evm_nonce = nonce;
+        emit("evm_nonce_set", serde_json::json!({ "nonce": nonce }));
+    }
+
     pub fn set_policy_hash(&mut self, version: u32, hash: String) {
         self.assert_owner();
         require!(version > self.policy_version, "policy version must increase");
@@ -434,7 +614,7 @@ impl Contract {
         require!(order.state == OrderState::Paid, "order is not in Paid state");
         require!(order.purchases.len() < MAX_PURCHASES, "too many purchases");
         let product = self.products.get(&order.sku).expect("product missing").clone();
-        require!(order.vendor_committed() + amount.0 <= product.max_expense.0, "purchase exceeds the order's expense cap");
+        require!(self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0, "purchase exceeds the order's expense cap");
 
         let needs_approval = amount.0 > self.purchase_approval_above.0;
         let status = if needs_approval { PurchaseStatus::AwaitingApproval } else { PurchaseStatus::Sending };
@@ -492,6 +672,109 @@ impl Contract {
         }));
     }
 
+    // ---------- cross-chain purchases (Chain Signatures) ----------
+
+    /// Agent asks to pay an approved EVM vendor in USDC from the treasury.
+    /// The contract builds the transaction; the agent only offers gas fees under the owner's cap.
+    pub fn request_evm_purchase(&mut self, order_id: String, vendor: String, amount: U128, max_fee_per_gas: U128, max_priority_fee_per_gas: U128) -> PromiseOrValue<u32> {
+        self.assert_agent();
+        require!(!self.paused, "paused");
+        let cfg = self.evm.clone().expect("cross-chain purchases are not configured");
+        require!(amount.0 > 0, "amount must be positive");
+        let vendor = evm::address_string(&evm::parse_address(&vendor).expect("vendor must be a 0x address"));
+        require!(self.evm_vendors.get(&vendor).copied().unwrap_or(false), "evm vendor is not approved");
+        require!(max_fee_per_gas.0 > 0 && max_fee_per_gas.0 <= cfg.max_fee_per_gas_cap.0, "max_fee_per_gas above the owner's cap");
+        require!(max_priority_fee_per_gas.0 <= max_fee_per_gas.0, "priority fee above max fee");
+        let order = self.order_or_panic(&order_id);
+        require!(order.state == OrderState::Paid, "order is not in Paid state");
+        let mut list = self.evm_purchases.get(&order_id).cloned().unwrap_or_default();
+        require!(order.purchases.len() + list.len() < MAX_PURCHASES, "too many purchases");
+        let product = self.products.get(&order.sku).expect("product missing").clone();
+        require!(self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0, "purchase exceeds the order's expense cap");
+
+        let needs_approval = amount.0 > self.purchase_approval_above.0;
+        list.push(EvmPurchase {
+            vendor: vendor.clone(),
+            amount,
+            chain_id: cfg.chain_id,
+            token: cfg.usdc.clone(),
+            gas_limit: cfg.gas_limit,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
+            nonce: None,
+            payload_hash: None,
+            status: if needs_approval { EvmPurchaseStatus::AwaitingApproval } else { EvmPurchaseStatus::Signing },
+            signature: None,
+        });
+        let index = (list.len() - 1) as u32;
+        self.evm_purchases.insert(order_id.clone(), list);
+        emit(
+            if needs_approval { "evm_purchase_awaiting_approval" } else { "evm_purchase_requested" },
+            serde_json::json!({ "order_id": order_id, "index": index, "vendor": vendor, "amount": amount, "chain_id": cfg.chain_id }),
+        );
+        if needs_approval {
+            PromiseOrValue::Value(index)
+        } else {
+            PromiseOrValue::Promise(self.start_signing(&order_id, index, &cfg))
+        }
+    }
+
+    pub fn approve_evm_purchase(&mut self, order_id: String, index: u32) -> Promise {
+        self.assert_owner();
+        require!(!self.paused, "paused");
+        let cfg = self.evm.clone().expect("cross-chain purchases are not configured");
+        let order = self.order_or_panic(&order_id);
+        require!(order.state == OrderState::Paid, "order is not in Paid state");
+        let mut list = self.evm_purchases.get(&order_id).cloned().expect("no evm purchases");
+        let p = list.get_mut(index as usize).expect("no such evm purchase");
+        require!(p.status == EvmPurchaseStatus::AwaitingApproval, "evm purchase is not awaiting approval");
+        require!(self.evm_vendors.get(&p.vendor).copied().unwrap_or(false), "evm vendor is no longer approved");
+        p.status = EvmPurchaseStatus::Signing;
+        self.evm_purchases.insert(order_id.clone(), list);
+        emit("evm_purchase_approved", serde_json::json!({ "order_id": order_id, "index": index, "by": env::predecessor_account_id() }));
+        self.start_signing(&order_id, index, &cfg)
+    }
+
+    pub fn reject_evm_purchase(&mut self, order_id: String, index: u32) {
+        self.assert_owner();
+        let mut list = self.evm_purchases.get(&order_id).cloned().expect("no evm purchases");
+        let p = list.get_mut(index as usize).expect("no such evm purchase");
+        require!(p.status == EvmPurchaseStatus::AwaitingApproval, "evm purchase is not awaiting approval");
+        p.status = EvmPurchaseStatus::Rejected;
+        self.evm_purchases.insert(order_id.clone(), list);
+        emit("evm_purchase_rejected", serde_json::json!({ "order_id": order_id, "index": index }));
+    }
+
+    #[private]
+    pub fn on_evm_signed(&mut self, order_id: String, index: u32, #[callback_result] result: Result<serde_json::Value, PromiseError>) {
+        let mut list = self.evm_purchases.get(&order_id).cloned().expect("no evm purchases");
+        let p = list.get_mut(index as usize).expect("no such evm purchase");
+        let sig = result.ok().and_then(|v| {
+            let big_r = v.get("big_r")?.get("affine_point")?.as_str()?.to_string();
+            let s = v.get("s")?.get("scalar")?.as_str()?.to_string();
+            let recovery_id = u8::try_from(v.get("recovery_id")?.as_u64()?).ok()?;
+            Some(EvmSignature { big_r, s, recovery_id })
+        });
+        match sig {
+            Some(sig) => {
+                p.status = EvmPurchaseStatus::Signed;
+                p.signature = Some(sig.clone());
+                let (vendor, amount, nonce, hash) = (p.vendor.clone(), p.amount, p.nonce, p.payload_hash.clone());
+                self.evm_purchases.insert(order_id.clone(), list);
+                emit("evm_purchase_signed", serde_json::json!({ "order_id": order_id, "index": index, "vendor": vendor, "amount": amount, "nonce": nonce, "payload_hash": hash, "signature": sig }));
+            }
+            None => {
+                p.status = EvmPurchaseStatus::Failed;
+                // Give the nonce back if nothing was signed after it.
+                if p.nonce == Some(self.evm_nonce.saturating_sub(1)) {
+                    self.evm_nonce -= 1;
+                }
+                self.evm_purchases.insert(order_id.clone(), list);
+                emit("evm_purchase_sign_failed", serde_json::json!({ "order_id": order_id, "index": index }));
+            }
+        }
+    }
+
     // ---------- fulfilment and settlement ----------
 
     pub fn mark_fulfilled(&mut self, order_id: String, report_hash: String) {
@@ -501,6 +784,7 @@ impl Contract {
         let mut order = self.order_or_panic(&order_id);
         require!(order.state == OrderState::Paid, "order is not in Paid state");
         require!(!order.has_open_purchase(), "a purchase is still open");
+        require!(!self.evm_purchases.get(&order_id).map(|l| l.iter().any(|p| p.open())).unwrap_or(false), "a cross-chain purchase is still open");
         order.state = OrderState::Fulfilled;
         order.report_hash = Some(report_hash.clone());
         self.orders.insert(order_id.clone(), order);
@@ -525,7 +809,10 @@ impl Contract {
         require!(order.state == OrderState::Fulfilled, "order is not in Fulfilled state");
         let product = self.products.get(&order.sku).expect("product missing").clone();
         let inference: u128 = claims.iter().map(|c| c.amount.0).fold(0u128, |a, b| a.checked_add(b).expect("claim overflow"));
-        let split = compute_split(order.gross.0, product.max_expense.0, self.contributor_bps, order.vendor_paid(), inference);
+        // Signed cross-chain purchases were paid from the owner-funded treasury: reimbursed like inference.
+        let evm_paid = self.evm_signed_total(&order_id);
+        let reimbursable = inference.checked_add(evm_paid).expect("claim overflow");
+        let split = compute_split(order.gross.0, product.max_expense.0, self.contributor_bps, order.vendor_paid(), reimbursable);
 
         let candidates = [
             (LegKind::Owner, self.owner_payout.clone(), split.owner),
@@ -549,7 +836,7 @@ impl Contract {
             "vendor_paid": U128(split.vendor_paid), "expenses_counted": U128(split.expenses),
             "distributable": U128(split.distributable), "owner": U128(split.owner),
             "contributor": U128(split.contributor), "reimb_owner": U128(split.reimb_owner),
-            "contributor_bps": self.contributor_bps,
+            "contributor_bps": self.contributor_bps, "evm_paid": U128(evm_paid),
         }));
 
         for (i, leg) in legs.iter().enumerate() {
@@ -585,6 +872,13 @@ impl Contract {
             "refund not permitted"
         );
         require!(!order.purchases.iter().any(|p| p.status == PurchaseStatus::Sending), "a purchase is in flight");
+        if let Some(mut list) = self.evm_purchases.get(&order_id).cloned() {
+            require!(!list.iter().any(|p| p.status == EvmPurchaseStatus::Signing), "a cross-chain signature is in flight");
+            for p in list.iter_mut().filter(|p| p.status == EvmPurchaseStatus::AwaitingApproval) {
+                p.status = EvmPurchaseStatus::Rejected;
+            }
+            self.evm_purchases.insert(order_id.clone(), list);
+        }
         for p in order.purchases.iter_mut() {
             if p.status == PurchaseStatus::AwaitingApproval {
                 p.status = PurchaseStatus::Rejected;
@@ -653,6 +947,28 @@ impl Contract {
         self.vendors.iter().map(|(k, v)| (k.clone(), *v)).collect()
     }
 
+    pub fn get_evm_config(&self) -> Option<EvmConfig> {
+        self.evm.clone()
+    }
+
+    pub fn get_evm_vendors(&self) -> Vec<(String, bool)> {
+        self.evm_vendors.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    pub fn get_evm_nonce(&self) -> u64 {
+        self.evm_nonce
+    }
+
+    pub fn get_evm_purchases(&self, order_id: String) -> Vec<EvmPurchase> {
+        self.evm_purchases.get(&order_id).cloned().unwrap_or_default()
+    }
+
+    /// The unsigned transaction a purchase signs (hex), so anyone can rebuild and check it.
+    pub fn get_evm_unsigned_tx(&self, order_id: String, index: u32) -> Option<String> {
+        let p = self.evm_purchases.get(&order_id)?.get(index as usize)?.clone();
+        Some(evm::to_hex(&evm::unsigned_eip1559(&Self::evm_tx(&p, p.nonce?))))
+    }
+
     // ---------- internals ----------
 
     fn send_purchase(&self, order_id: &str, index: u32, vendor: &AccountId, amount: U128) -> Promise {
@@ -677,6 +993,48 @@ impl Contract {
                     .with_static_gas(CALLBACK_GAS)
                     .on_leg_resolved(order_id.to_string(), leg_index),
             )
+    }
+
+    fn evm_tx(p: &EvmPurchase, nonce: u64) -> evm::Erc20Transfer {
+        evm::Erc20Transfer {
+            chain_id: p.chain_id,
+            nonce,
+            max_priority_fee_per_gas: p.max_priority_fee_per_gas.0,
+            max_fee_per_gas: p.max_fee_per_gas.0,
+            gas_limit: p.gas_limit,
+            token: evm::parse_address(&p.token).expect("stored token is valid"),
+            to: evm::parse_address(&p.vendor).expect("stored vendor is valid"),
+            amount: p.amount.0,
+        }
+    }
+
+    /// Assigns the next treasury nonce, fixes the payload hash and asks the MPC network to sign it.
+    fn start_signing(&mut self, order_id: &str, index: u32, cfg: &EvmConfig) -> Promise {
+        let mut list = self.evm_purchases.get(order_id).cloned().expect("no evm purchases");
+        let p = list.get_mut(index as usize).expect("no such evm purchase");
+        let nonce = self.evm_nonce;
+        self.evm_nonce += 1;
+        let hash = env::keccak256(&evm::unsigned_eip1559(&Self::evm_tx(p, nonce)));
+        let hash_hex = evm::to_hex(&hash);
+        p.nonce = Some(nonce);
+        p.payload_hash = Some(hash_hex.clone());
+        self.evm_purchases.insert(order_id.to_string(), list);
+        emit("evm_signature_requested", serde_json::json!({ "order_id": order_id, "index": index, "nonce": nonce, "payload_hash": hash_hex }));
+        ext_mpc::ext(cfg.mpc_contract.clone())
+            .with_attached_deposit(ONE_YOCTO)
+            .with_static_gas(MPC_SIGN_GAS)
+            .sign(MpcSignRequest { path: EVM_TREASURY_PATH.to_string(), payload_v2: MpcPayload::Ecdsa(hash_hex), domain_id: 0 })
+            .then(Self::ext(env::current_account_id()).with_static_gas(SIGN_CALLBACK_GAS).on_evm_signed(order_id.to_string(), index))
+    }
+
+    /// NEAR purchases plus cross-chain purchases that count against the cap.
+    fn committed_spend(&self, order_id: &str, order: &Order) -> u128 {
+        let evm: u128 = self.evm_purchases.get(order_id).map(|l| l.iter().filter(|p| p.committed()).map(|p| p.amount.0).sum()).unwrap_or(0);
+        order.vendor_committed() + evm
+    }
+
+    fn evm_signed_total(&self, order_id: &str) -> u128 {
+        self.evm_purchases.get(order_id).map(|l| l.iter().filter(|p| p.status == EvmPurchaseStatus::Signed).map(|p| p.amount.0).sum()).unwrap_or(0)
     }
 
     fn order_or_panic(&self, order_id: &str) -> Order {
