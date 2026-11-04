@@ -25,7 +25,7 @@ interface OrderData {
   ledger: { order_id?: string | null; event_type: string; status: LedgerStatus; amount_units: string | null; counterparty: string | null; tx_hash: string | null; explorer_url: string | null; details: Record<string, unknown>; at: string }[];
   purchase: { status: string; amount_units: string } | null;
   report: { content: string; content_hash: string } | null;
-  proofs: { purpose: string; model: string; chat_id: string; signature_kind: string | null; signing_address: string | null; verification_level: string; request_hash: string; response_hash: string; tokens_in: number; tokens_out: number; cost_usd_micros: string }[];
+  proofs: { purpose: string; model: string; chat_id: string; signature_kind: string | null; signing_address: string | null; verification_level: string; gpu_attestation: "PASS" | "FAIL" | "ERROR" | null; gpu_attestation_detail: { detail: string; issued_at: string | null } | null; request_hash: string; response_hash: string; tokens_in: number; tokens_out: number; cost_usd_micros: string }[];
 }
 
 const STAGES: { key: string; label: string; states: string[] }[] = [
@@ -318,6 +318,10 @@ function Proofs({ proofs, reportHash }: { proofs: OrderData["proofs"]; reportHas
             <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 font-mono text-ink-3">
               <dt>model</dt><dd className="truncate">{p.model}</dd>
               <dt>signer</dt><dd className="truncate">{p.signing_address ?? "n/a"}</dd>
+              <dt>GPU</dt>
+              <dd className={p.gpu_attestation === "PASS" ? "text-real" : p.gpu_attestation === "FAIL" ? "text-failed" : ""} title={p.gpu_attestation_detail?.detail}>
+                {p.gpu_attestation === "PASS" ? "● Verified by NVIDIA NRAS" : p.gpu_attestation === "FAIL" ? "✕ NVIDIA NRAS check failed" : p.gpu_attestation === "ERROR" ? "◌ NRAS check unavailable" : "not checked"}
+              </dd>
               <dt>request</dt><dd className="truncate">{p.request_hash}</dd>
               <dt>response</dt><dd className="truncate">{p.response_hash}</dd>
               <dt>cost</dt><dd><Money units={p.cost_usd_micros} symbol="USD" /></dd>

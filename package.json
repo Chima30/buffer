@@ -10,6 +10,7 @@
     "test": "vitest run",
     "typecheck": "next typegen && tsc --noEmit",
     "m0": "tsx scripts/m0-check.ts",
+    "nras": "tsx scripts/nras-check.ts",
     "outlayer:register": "tsx scripts/outlayer-register.ts",
     "outlayer:policy": "tsx scripts/outlayer-policy.ts",
     "seed": "tsx scripts/seed.ts"
@@ -19,6 +20,7 @@
     "@outlayer/sdk": "0.1.0-alpha.4",
     "@supabase/supabase-js": "2.118.0",
     "geist": "1.9.0",
+    "jose": "^6.2.15",
     "near-api-js": "7.4.0",
     "near-connect-hooks": "1.1.6",
     "next": "16.4.4",

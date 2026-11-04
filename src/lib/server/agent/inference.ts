@@ -9,6 +9,7 @@ import type { BusinessContext } from "../business";
 import { db, must } from "../db";
 import { nearAiConfig } from "../env";
 import { chat, getAttestation, getSignature, inferenceCostUsdMicros, verifyChat, type ChatMessage, type VerificationLevel } from "../nearai";
+import { verifyGpuAttestation, type GpuAttestation } from "../nras";
 import { recordAction } from "./actions";
 
 export interface InferenceOutcome {
@@ -85,10 +86,14 @@ export async function runInference(params: {
 
   let verification: VerificationLevel | "UNVERIFIED" = "UNVERIFIED";
   let sig: Awaited<ReturnType<typeof getSignature>> | null = null;
+  let gpu: GpuAttestation | null = null;
   try {
     sig = await getSignature(result.chatId, result.model);
     const att = await getAttestation(result.model);
-    verification = (await verifyChat(result, sig, att.report)).level;
+    const v = await verifyChat(result, sig, att.report);
+    verification = v.level;
+    // Only worth asking NVIDIA once the signer is tied to the attested node.
+    if (v.level === "SIGNATURE_ATTESTED") gpu = await verifyGpuAttestation(att.report, att.nonce, v.recoveredAddress);
   } catch {
     verification = "UNVERIFIED";
   }
@@ -111,6 +116,8 @@ export async function runInference(params: {
         signing_address: sig?.signingAddress ?? null,
         signature: sig?.signature ?? null,
         verification_level: verification,
+        gpu_attestation: gpu?.verdict ?? null,
+        gpu_attestation_detail: gpu ? { detail: gpu.detail, arch: gpu.arch ?? null, gpus: gpu.gpus ?? null, issued_at: gpu.issuedAt ?? null, nras_platform_token: gpu.platformToken ?? null } : null,
       })
       .select("id")
       .single(),

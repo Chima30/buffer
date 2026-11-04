@@ -23,7 +23,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
   if (authorised) {
     const r = await db().from("reports").select("content,content_hash,created_at").eq("order_id", id).maybeSingle();
     report = r.data;
-    const calls = await db().from("inference_calls").select("purpose,model,chat_id,signature_kind,signing_address,verification_level,request_hash,response_hash,tokens_in,tokens_out,cost_usd_micros").eq("order_id", id).order("created_at");
+    const calls = await db().from("inference_calls").select("purpose,model,chat_id,signature_kind,signing_address,verification_level,gpu_attestation,gpu_attestation_detail,request_hash,response_hash,tokens_in,tokens_out,cost_usd_micros").eq("order_id", id).order("created_at");
     proofs = calls.data ?? [];
   }
 
