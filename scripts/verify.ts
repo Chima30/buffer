@@ -1,5 +1,5 @@
 /**
- * npm run verify -- <order URL or id> [--base https://buffer-zeta.vercel.app]
+ * npm run verify -- <order URL or id> [--base https://buffer-zeta.vercel.app] [--rpc <NEAR testnet RPC>]
  *
  * Independently checks one order from public data only (no keys, no .env):
  * NEAR testnet, Ethereum Sepolia, the NEAR MPC contract and NVIDIA's keys.
@@ -21,7 +21,8 @@ async function main() {
     token = new URLSearchParams(u.hash.slice(1)).get("t") ?? undefined;
   }
   console.log(`Verifying order ${orderId} from ${base} using public chains only\n`);
-  const checks = await verifyOrder({ base, orderId, token });
+  const rpc = args.includes("--rpc") ? args[args.indexOf("--rpc") + 1] : undefined;
+  const checks = await verifyOrder({ base, orderId, token, nearRpc: rpc });
   let group = "";
   for (const c of checks) {
     if (c.group !== group) {

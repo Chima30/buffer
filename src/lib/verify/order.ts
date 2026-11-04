@@ -52,14 +52,40 @@ interface ChainOrder {
   legs: { kind: string; recipient: string; amount: string; status: string }[];
 }
 
-async function rpc<T>(url: string, method: string, params: unknown): Promise<T> {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: "verify", method, params }) });
-  const j = (await res.json()) as { result?: T; error?: { cause?: { name?: string }; name?: string } };
-  if (j.error) throw new Error(j.error.cause?.name ?? j.error.name ?? "RPC error");
-  return j.result as T;
+/** Public NEAR testnet RPC endpoints, tried in order (the first is often rate-limited). */
+export const NEAR_TESTNET_RPCS = ["https://rpc.testnet.near.org", "https://test.rpc.fastnear.com", "https://near-testnet.drpc.org"];
+
+async function rpc<T>(urls: string | string[], method: string, params: unknown): Promise<T> {
+  const list = Array.isArray(urls) ? urls : [urls];
+  let last = "";
+  for (const url of list) {
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: "verify", method, params }) });
+      const text = await res.text();
+      let j: { result?: T; error?: { cause?: { name?: string; info?: unknown }; name?: string; message?: string; data?: unknown } };
+      try {
+        j = JSON.parse(text);
+      } catch {
+        last = `${url}: HTTP ${res.status} ${text.slice(0, 120)}`;
+        continue;
+      }
+      if (j.error) {
+        const name = j.error.cause?.name ?? j.error.name ?? "";
+        // A real answer about the request (unknown tx, missing account): do not try other nodes.
+        if (/UNKNOWN_TRANSACTION|UNKNOWN_ACCOUNT|NO_CONTRACT_CODE|CONTRACT_EXECUTION_ERROR|INVALID_TRANSACTION/.test(name)) throw new Error(`${method}: ${name}`);
+        last = `${url}: ${name || j.error.message || JSON.stringify(j.error).slice(0, 160)}`;
+        continue;
+      }
+      return j.result as T;
+    } catch (e) {
+      if ((e as Error).message.startsWith(`${method}:`)) throw e;
+      last = `${url}: ${(e as Error).message}`;
+    }
+  }
+  throw new Error(`NEAR RPC ${method} failed on every endpoint. Last: ${last}`);
 }
 
-async function view<T>(url: string, contract: string, method: string, args: Record<string, unknown> = {}): Promise<T> {
+async function view<T>(url: string | string[], contract: string, method: string, args: Record<string, unknown> = {}): Promise<T> {
   const r = await rpc<{ result: number[] }>(url, "query", { request_type: "call_function", finality: "final", account_id: contract, method_name: method, args_base64: Buffer.from(JSON.stringify(args)).toString("base64") });
   return JSON.parse(Buffer.from(r.result).toString("utf8")) as T;
 }
@@ -67,7 +93,7 @@ async function view<T>(url: string, contract: string, method: string, args: Reco
 type NearTx = { status: unknown; transaction: { signer_id: string; receiver_id: string }; receipts_outcome: { outcome: { logs: string[] } }[] };
 
 /** Finds a NEAR transaction by trying the likely signers (the RPC needs one). */
-async function nearTx(url: string, hash: string, senders: string[]): Promise<NearTx | null> {
+async function nearTx(url: string | string[], hash: string, senders: string[]): Promise<NearTx | null> {
   for (const s of [...new Set(senders.filter(Boolean))]) {
     try {
       return await rpc<NearTx>(url, "tx", { tx_hash: hash, sender_account_id: s, wait_until: "FINAL" });
@@ -95,7 +121,7 @@ const bufferEvents = (t: NearTx) =>
 const sha256Hex = async (s: string) => Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s))).toString("hex");
 
 export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
-  const near = o.nearRpc ?? "https://rpc.testnet.near.org";
+  const near = o.nearRpc ? [o.nearRpc] : NEAR_TESTNET_RPCS;
   const sepoliaRpc = o.sepoliaRpc ?? "https://ethereum-sepolia-rpc.publicnode.com";
   const mpc = o.mpcContract ?? "v1.signer-prod.testnet";
   const checks: Check[] = [];
