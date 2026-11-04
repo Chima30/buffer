@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { SiteHeader } from "@/components/site-header";
 
 type Outcome = "BLOCKED" | "NOT_BLOCKED" | "ERROR";
-type EvidenceKind = "signed_inference" | "policy_engine" | "custody_policy" | "onchain_tx";
+type EvidenceKind = "signed_inference" | "policy_engine" | "custody_policy" | "contract_check" | "onchain_tx";
 
 interface Defence { layer: string; kind: EvidenceKind; held: boolean; breached?: boolean; detail: string; txHash?: string; explorerUrl?: string }
 interface AttackResult { key: string; title: string; goal: string; attempt: string; outcome: Outcome; defences: Defence[]; error?: string }
@@ -14,6 +14,7 @@ const KIND: Record<EvidenceKind, string> = {
   signed_inference: "Signed TEE inference",
   policy_engine: "Deterministic check",
   custody_policy: "Custody refusal",
+  contract_check: "Contract rejection",
   onchain_tx: "On-chain transaction",
 };
 
