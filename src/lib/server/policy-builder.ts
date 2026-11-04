@@ -145,3 +145,31 @@ export async function openDraft(businessId: string, onchain: OnchainConfig) {
   return { version: r.data.version, hash: r.data.rules_hash as string, sourceText: r.data.source_text as string | null, createdAt: r.data.created_at as string, commands: ownerCommands(doc, r.data.rules_hash, onchain) };
 }
 
+
+/**
+ * Drafts the next policy version so it may sell every active product it does not
+ * price yet, at no less than the product's listed price. Like any draft it does
+ * nothing until the owner anchors its hash on-chain.
+ */
+export async function draftProductPricing(): Promise<{ version: number; hash: string; added: string[] } | null> {
+  const onchain = await getConfig();
+  const pre = await loadBusiness();
+  await promoteAnchoredDraft(pre.business.id, onchain);
+  const ctx = await loadBusiness();
+  const priced = ctx.policy.rules.pricing.min_price_units;
+  const missing = ctx.products.filter((p) => priced[p.sku] === undefined);
+  if (missing.length === 0) return null;
+  const next: PolicyDocument = {
+    ...ctx.policy,
+    version: ctx.policy.version + 1,
+    rules: {
+      ...ctx.policy.rules,
+      pricing: { min_price_units: { ...priced, ...Object.fromEntries(missing.map((p) => [p.sku, String(p.price_units)])) } },
+    },
+  };
+  const hash = policyHash(next);
+  const text = `Allow selling ${missing.map((p) => `${p.title} (${p.sku}) at no less than ${formatUnits(BigInt(p.price_units))} USDC`).join("; ")}.`;
+  await db().from("policies").delete().eq("business_id", ctx.business.id).in("status", ["draft", "pending_signature"]);
+  must(await db().from("policies").insert({ business_id: ctx.business.id, version: next.version, source_text: text, rules: next.rules, rules_hash: hash, status: "draft" }).select("id").single(), "save pricing draft");
+  return { version: next.version, hash, added: missing.map((p) => p.sku) };
+}

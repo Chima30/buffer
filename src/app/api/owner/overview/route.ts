@@ -110,6 +110,8 @@ async function overview() {
         sku: sp.sku,
         title: sp.title,
         contractSupports: plans !== null,
+        // The policy must price a product before the agent may deliver it.
+        policyAllows: !!activeDoc && activeDoc.rules.pricing.min_price_units[sp.sku] !== undefined,
         product: onchainProduct ? { price: onchainProduct.price, maxExpense: onchainProduct.max_expense, active: onchainProduct.active } : null,
         plan: plan ?? null,
         // Testnet demo pace: one issue an hour, 2 to 8 issues.

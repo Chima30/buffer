@@ -146,6 +146,12 @@ export async function runSubscriptions(limit = 5): Promise<{ opened: number }> {
   }
   let opened = 0;
   for (const s of due) {
+    // Never open an issue the policy would not let the agent deliver: the prepayment stays in escrow.
+    const product = ctx.products.find((p) => p.id === s.product_id);
+    if (!product || ctx.policy.rules.pricing.min_price_units[product.sku] === undefined) {
+      await db().from("subscriptions").update({ last_error: "Waiting: the active policy does not price this product yet" }).eq("id", s.id);
+      continue;
+    }
     const chain = await getSubscription(s.onchain_subscription_id);
     // An issue the chain opened but we never recorded: replay the same idempotent call to record it.
     const behind = !!chain && chain.issues_started > s.issues_started;
