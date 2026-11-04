@@ -53,6 +53,23 @@ export async function callContract(params: {
   });
 }
 
+/**
+ * RED-TEAM ONLY. Sends a call the agent's normal code can never make (another
+ * contract, an owner-only method, an unapproved vendor) so the security test can
+ * show the custody policy and the contract refusing it. Used only by
+ * src/lib/server/redteam.ts, behind RUNTIME_SECRET.
+ */
+export async function redteamCall(params: { receiverId: string; method: string; args: Record<string, unknown>; deposit?: string; idempotencyKey: string }): Promise<CallResponse> {
+  return outlayer().call({
+    receiver_id: params.receiverId,
+    method_name: params.method,
+    args: params.args,
+    gas: CALL_GAS,
+    deposit: params.deposit ?? "0",
+    idempotencyKey: params.idempotencyKey,
+  });
+}
+
 export async function requestStatus(requestId: string) {
   return outlayer().getRequest(requestId);
 }

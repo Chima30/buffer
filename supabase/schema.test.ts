@@ -11,7 +11,9 @@ const sql =
     // pgcrypto is preinstalled on Supabase; gen_random_uuid is core in PG13+.
     .replace("create extension if not exists pgcrypto;", "") +
   "\n" +
-  readFileSync(new URL("./migrations/20261103010000_runtime.sql", import.meta.url), "utf8");
+  readFileSync(new URL("./migrations/20261103010000_runtime.sql", import.meta.url), "utf8") +
+  "\n" +
+  readFileSync(new URL("./migrations/20261104000000_security.sql", import.meta.url), "utf8");
 
 let db: PGlite;
 let biz: string;

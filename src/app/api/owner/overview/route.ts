@@ -22,7 +22,7 @@ export async function GET() {
     db().from("policies").select("version,rules_hash,source_text,activated_at").eq("status", "active").maybeSingle(),
     db().from("payments").select("v:amount_units").eq("status", "VERIFIED"),
     db().from("procurements").select("v:amount_units").eq("status", "confirmed"),
-    db().from("inference_calls").select("v:cost_usd_micros"),
+    db().from("inference_calls").select("v:cost_usd_micros").not("order_id", "is", null),
     db().from("distributions").select("leg,amount_units,status"),
     db().from("procurements").select("id,amount_units,onchain_index,created_at,orders!inner(onchain_order_id,state),vendors!inner(name,near_account)").eq("status", "awaiting_approval"),
     db().from("orders").select("id,onchain_order_id,state,price_units,created_at,updated_at").order("created_at", { ascending: false }).limit(10),

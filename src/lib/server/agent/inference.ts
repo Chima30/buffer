@@ -45,7 +45,8 @@ export class PolicyDenied extends Error {
 export async function runInference(params: {
   ctx: BusinessContext;
   evalCtx: EvaluationContext;
-  orderId: string;
+  /** null for runs outside an order (the red-team suite). */
+  orderId: string | null;
   purpose: string;
   messages: ChatMessage[];
   maxTokens: number;

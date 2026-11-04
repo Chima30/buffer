@@ -4,6 +4,7 @@
  */
 import { bufferEventsFromTx, type BufferEvent } from "../contract";
 import { nearConfig } from "../env";
+import type { CallResponse } from "@outlayer/sdk";
 import { callContract, requestStatus } from "../outlayer";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -22,6 +23,11 @@ export async function execContractCall(params: {
 }): Promise<ExecResult> {
   const { contractId } = nearConfig();
   const res = await callContract({ contractId, method: params.method, args: params.args, idempotencyKey: params.idempotencyKey });
+  return followCall(res, params.agentAccount, params.maxWaitMs);
+}
+
+/** Follows an OutLayer call to a final, on-chain-verified result. */
+export async function followCall(res: CallResponse, agentAccount: string, maxWaitMs = 45_000): Promise<ExecResult> {
   if (res.status === "pending_approval") {
     // Our OutLayer policy has no approval gate; approvals live in the business contract.
     return { state: "FAILED", reason: "OutLayer unexpectedly requested approval for a contract call" };
@@ -30,7 +36,7 @@ export async function execContractCall(params: {
   let txHash = res.tx_hash ?? null;
   let status: string = res.status;
   let failure: unknown = res.result ?? null;
-  const deadline = Date.now() + (params.maxWaitMs ?? 45_000);
+  const deadline = Date.now() + maxWaitMs;
   while (!txHash && (status === "processing" || status === "approved" || status === "pending_deposit")) {
     if (Date.now() > deadline) return { state: "PENDING", requestId: res.request_id };
     await sleep(1500);
@@ -48,7 +54,7 @@ export async function execContractCall(params: {
 
   // Never trust the custody API's word alone: confirm the transaction on-chain.
   for (let i = 0; i < 10; i++) {
-    const v = await bufferEventsFromTx(txHash, params.agentAccount);
+    const v = await bufferEventsFromTx(txHash, agentAccount);
     if (v.state === "SUCCESS") return { state: "CONFIRMED", txHash, events: v.events };
     if (v.state === "FAILED") return { state: "FAILED", reason: v.reason, txHash };
     await sleep(1500);
