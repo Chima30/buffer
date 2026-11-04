@@ -9,7 +9,8 @@ import { txHashOf, useNearWallet } from "@/components/wallet";
 interface Overview {
   business: { id: string; name: string; status: "active" | "paused" } | null;
   contract: { id: string; paused: boolean; owner: string; policyVersion: number; policyHash: string | null; approvalAboveUnits: string; contributor: string; contributorBps: number };
-  policy: { version: number; rules_hash: string; source_text: string | null; activated_at: string | null } | null;
+  policy: { version: number; rules_hash: string; source_text: string | null; activated_at: string | null; values: Record<string, string> | null } | null;
+  pendingPolicy: { version: number; hash: string; sourceText: string | null; createdAt: string | null; commands: OwnerCommand[] } | null;
   policyAnchored: boolean;
   agent: { id: string; name: string; role: string; near_account: string; status: "running" | "paused" | "frozen"; walletPubkey: string | null } | null;
   totals: { revenue: string; vendorSpend: string; inferenceSpend: string; net: string; ownerPaid: string; contributorPaid: string };
@@ -18,7 +19,20 @@ interface Overview {
   recentActions: { tool: string; decision: "allow" | "deny" | "needs_approval"; reasons: { code: string; message: string; ruleId?: string }[]; policy_version: number; at: string }[];
 }
 
+interface OwnerCommand { label: string; method: "set_policy_hash" | "set_purchase_approval_above"; args: Record<string, unknown> }
+interface DraftResult { version: number; hash: string | null; changes: { field: string; label: string; from: string; to: string }[]; warnings: string[]; errors: string[]; unsupported: string[]; commands: OwnerCommand[]; verification: string; chatId: string }
+
 const OUTLAYER_CONTRACT = "outlayer.testnet";
+
+const VALUE_LABELS: Record<string, [string, string]> = {
+  approval_above_usdc: ["Owner approval needed above", "USDC"],
+  max_per_purchase_usdc: ["Maximum per vendor purchase", "USDC"],
+  per_transaction_usdc: ["Maximum per transaction", "USDC"],
+  daily_spend_usdc: ["Daily spending limit", "USDC"],
+  monthly_spend_usdc: ["Monthly spending limit", "USDC"],
+  inference_daily_usd: ["Daily AI inference budget", "USD"],
+  inference_monthly_usd: ["Monthly AI inference budget", "USD"],
+};
 
 /** near-cli command for Windows PowerShell; --% keeps the JSON quotes intact. */
 function cliCommand(contractId: string, method: string, args: Record<string, unknown>, signer: string, gas = "100 Tgas") {
@@ -239,7 +253,35 @@ export default function OwnerConsole() {
                   {data.policyAnchored ? <span className="text-real">● matches the on-chain anchor</span> : <span className="text-failed">✕ does not match the on-chain anchor: the agent will not act</span>}
                 </p>
                 {data.policy?.source_text && <blockquote className="mt-3 border-l-2 border-rule-strong pl-3 text-sm text-ink-2">{data.policy.source_text}</blockquote>}
+                {data.policy?.values && (
+                  <dl className="mt-3 grid grid-cols-[1fr_auto] gap-x-3 gap-y-0.5 text-xs">
+                    {Object.entries(VALUE_LABELS).map(([k, [label, unit]]) => (
+                      <div key={k} className="contents"><dt className="text-ink-3">{label}</dt><dd className="text-right font-mono">{data.policy?.values?.[k]} {unit}</dd></div>
+                    ))}
+                    <dt className="text-ink-3">Payments to unapproved wallets</dt><dd className="text-right font-mono">always blocked</dd>
+                  </dl>
+                )}
                 <p className="mt-3 break-all font-mono text-xs text-ink-3">sha256 {data.contract.policyHash}</p>
+
+                {data.pendingPolicy && (
+                  <div className="mt-4 rounded-md border border-pending p-3">
+                    <p className="text-sm font-medium">Waiting for your signature: policy v{data.pendingPolicy.version}</p>
+                    {data.pendingPolicy.sourceText && <p className="mt-1 text-xs text-ink-2">&ldquo;{data.pendingPolicy.sourceText}&rdquo;</p>}
+                    <p className="mt-1 break-all font-mono text-[11px] text-ink-3">sha256 {data.pendingPolicy.hash}</p>
+                    <p className="mt-2 text-xs text-ink-2">Nothing changes until you sign. While the two steps are half done, the agent pauses itself rather than act on mixed rules.</p>
+                    {data.pendingPolicy.commands.map((c, i) => (
+                      <div key={c.method} className="mt-3">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs">{i + 1}. {c.label}</span>
+                          <button disabled={!isOwner || !!busy} onClick={() => act(c.label, data.contract.id, c.method, c.args, "30000000000000")} className="rounded-md bg-ink px-2.5 py-1 text-xs font-medium text-paper disabled:opacity-40">Sign</button>
+                        </div>
+                        <CliFallback label={c.label} command={cliCommand(data.contract.id, c.method, c.args, data.contract.owner, "30 Tgas")} busy={!!busy} onSubmit={(h) => recordPasted(c.label, h)} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <PolicyBuilder onDrafted={load} />
               </Card>
 
               <Card title="Agent">
@@ -255,6 +297,68 @@ export default function OwnerConsole() {
         </>
       )}
     </main>
+  );
+}
+
+function PolicyBuilder({ onDrafted }: { onDrafted: () => Promise<void> }) {
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<DraftResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function draft() {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      const res = await fetch("/api/policy/draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      const j = await res.json();
+      if (!res.ok) throw new Error(j.error ?? "Could not draft the policy");
+      setResult(j);
+      await onDrafted();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mt-5 border-t border-rule pt-4">
+      <h3 className="text-sm font-medium">Change the rules in plain English</h3>
+      <p className="mt-1 text-xs text-ink-3">The AI only translates your words into numbers. Code checks the result, and nothing changes until you sign it on-chain.</p>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={3}
+        maxLength={1000}
+        placeholder="e.g. Purchases above $5 need my approval, and keep AI spending under $10 a day."
+        className="mt-2 w-full rounded-md border border-rule-strong bg-paper p-2 text-sm"
+      />
+      <button disabled={busy || text.trim().length < 5} onClick={draft} className="mt-2 rounded-md border border-rule-strong px-3 py-1.5 text-sm disabled:opacity-40">
+        {busy ? "Drafting…" : "Draft new policy"}
+      </button>
+      {error && <p className="mt-2 text-xs text-failed">{error}</p>}
+      {result && (
+        <div className="mt-3 space-y-2 text-xs">
+          {result.changes.length > 0 && (
+            <table className="w-full">
+              <thead className="text-left text-ink-3"><tr><th className="font-normal">Rule</th><th className="font-normal">Now</th><th className="font-normal">New</th></tr></thead>
+              <tbody>
+                {result.changes.map((c) => (
+                  <tr key={c.field}><td>{c.label}</td><td className="font-mono text-ink-3">{c.from}</td><td className="font-mono">{c.to}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {result.unsupported.map((u) => <p key={u} className="text-pending">Not supported, left unchanged: &ldquo;{u}&rdquo;</p>)}
+          {result.errors.map((e) => <p key={e} className="text-failed">✕ {e}</p>)}
+          {result.warnings.map((w) => <p key={w} className="text-pending">! {w}</p>)}
+          <p className="text-ink-3">Translated by {result.verification === "SIGNATURE_ATTESTED" ? "private TEE inference (signature verified)" : `NEAR AI (${result.verification})`}.</p>
+          {result.hash && <p className="text-real">Draft v{result.version} saved. Sign it above to put it in force.</p>}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -2,10 +2,11 @@
  * Loads everything the runtime needs about the business and refuses to act if
  * the active policy does not match the hash anchored on-chain.
  */
+import { approvalThresholdUnits } from "@/lib/domain/policy/draft";
 import { assertPolicyAnchored } from "@/lib/domain/policy/hash";
 import { policyDocumentSchema, type PolicyDocument } from "@/lib/domain/policy/schema";
 import type { EvaluationContext } from "@/lib/domain/policy/evaluate";
-import { getConfig } from "./contract";
+import { getConfig, type OnchainConfig } from "./contract";
 import { db, must } from "./db";
 import { nearConfig } from "./env";
 
@@ -35,14 +36,24 @@ export async function loadBusiness(): Promise<BusinessContext> {
 
 /** The runtime calls this before every effectful step. */
 export async function loadBusinessAnchored(): Promise<BusinessContext> {
-  const ctx = await loadBusiness();
+  let ctx = await loadBusiness();
   const onchain = await getConfig();
+  // The owner may have just anchored a new policy draft: follow the chain.
+  if (onchain.policy_version > ctx.policy.version && (await promoteAnchoredDraft(ctx.business.id, onchain)) !== null) ctx = await loadBusiness();
   if (onchain.paused) throw new HaltError("Business contract is paused");
   // Frozen or paused agents wait; their orders resume when the owner lifts it.
   if (ctx.agent.status !== "running") throw new HaltError(`Agent is ${ctx.agent.status}`);
   if (ctx.business.status !== "active") throw new HaltError("Business is paused");
-  assertPolicyAnchored(ctx.policy, onchain.policy_hash);
+  try {
+    assertPolicyAnchored(ctx.policy, onchain.policy_hash);
+  } catch (e) {
+    throw new HaltError((e as Error).message);
+  }
   if (onchain.policy_version !== ctx.policy.version) throw new HaltError("Policy version on-chain differs from the active policy");
+  // The contract enforces the approval threshold itself; both must agree.
+  if (BigInt(onchain.purchase_approval_above) !== approvalThresholdUnits(ctx.policy)) {
+    throw new HaltError("The contract's approval threshold differs from the policy; the owner must set it on-chain");
+  }
   return ctx;
 }
 
@@ -82,4 +93,19 @@ export async function evaluationContext(ctx: BusinessContext): Promise<Evaluatio
     inferenceTodayUsdMicros: sum(idy.data as { v: string }[] | null),
     inferenceMonthUsdMicros: sum(imo.data as { v: string }[] | null),
   };
+}
+
+/**
+ * If the owner anchored a draft's hash on-chain, make that draft the active
+ * policy. Safe to call any time: it only follows what the contract already says.
+ */
+export async function promoteAnchoredDraft(businessId: string, onchain: OnchainConfig, txHash?: string): Promise<number | null> {
+  if (!onchain.policy_hash) return null;
+  const draft = await db().from("policies").select("id,version").eq("business_id", businessId).eq("version", onchain.policy_version).eq("rules_hash", onchain.policy_hash).in("status", ["draft", "pending_signature"]).maybeSingle();
+  if (!draft.data) return null;
+  const now = new Date().toISOString();
+  must(await db().from("policies").update({ status: "superseded" }).eq("business_id", businessId).eq("status", "active").select("id"), "supersede old policy");
+  must(await db().from("policies").update({ status: "active", signed_by: onchain.owner, activated_at: now, onchain_tx: txHash ?? null }).eq("id", draft.data.id).select("id").single(), "activate policy");
+  must(await db().from("businesses").update({ active_policy_version: draft.data.version }).eq("id", businessId).select("id").single(), "business policy version");
+  return draft.data.version;
 }

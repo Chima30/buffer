@@ -6,7 +6,11 @@
  */
 import { connection } from "next/server";
 import { getConfig } from "@/lib/server/contract";
+import { editableValues } from "@/lib/domain/policy/draft";
+import type { PolicyDocument } from "@/lib/domain/policy/schema";
+import { promoteAnchoredDraft } from "@/lib/server/business";
 import { db } from "@/lib/server/db";
+import { openDraft, ownerCommands } from "@/lib/server/policy-builder";
 import { nearConfig } from "@/lib/server/env";
 import { json } from "@/lib/server/http";
 
@@ -15,11 +19,14 @@ const sum = (rows: { v: string | null }[] | null) => (rows ?? []).reduce((a, r) 
 export async function GET() {
   await connection(); // live data: never prerender at build time
   const near = nearConfig();
+  // Catch up if the owner anchored a draft since the last view.
+  const biz0 = await db().from("businesses").select("id").eq("contract_id", near.contractId).maybeSingle();
+  if (biz0.data) await promoteAnchoredDraft(biz0.data.id, await getConfig());
   const [onchain, business, agent, policy, payments, vendorSpend, inferenceSpend, payouts, pending, orders, actions] = await Promise.all([
     getConfig(),
     db().from("businesses").select("id,name,status").eq("contract_id", near.contractId).single(),
     db().from("agents").select("id,name,role,near_account,status,outlayer_wallet_id").limit(1).single(),
-    db().from("policies").select("version,rules_hash,source_text,activated_at").eq("status", "active").maybeSingle(),
+    db().from("policies").select("version,rules,rules_hash,business_id,source_text,activated_at").eq("status", "active").maybeSingle(),
     db().from("payments").select("v:amount_units").eq("status", "VERIFIED"),
     db().from("procurements").select("v:amount_units").eq("status", "confirmed"),
     db().from("inference_calls").select("v:cost_usd_micros").not("order_id", "is", null),
@@ -34,6 +41,14 @@ export async function GET() {
   const vendor = sum(vendorSpend.data as { v: string }[] | null);
   const inference = sum(inferenceSpend.data as { v: string }[] | null);
 
+  const activeDoc = policy.data ? ({ version: policy.data.version, business_id: policy.data.business_id, rules: policy.data.rules } as PolicyDocument) : null;
+  const draft = business.data ? await openDraft(business.data.id, onchain) : null;
+  // Owner transactions still needed: the open draft's, or a contract value that lags the active policy.
+  const pendingPolicy = draft ?? (activeDoc && policy.data ? (() => {
+    const commands = ownerCommands(activeDoc, policy.data.rules_hash, onchain);
+    return commands.length ? { version: activeDoc.version, hash: policy.data.rules_hash, sourceText: policy.data.source_text, createdAt: policy.data.activated_at, commands } : null;
+  })() : null);
+
   return json({
     business: business.data,
     contract: {
@@ -46,7 +61,8 @@ export async function GET() {
       contributor: onchain.contributor,
       contributorBps: onchain.contributor_bps,
     },
-    policy: policy.data,
+    policy: policy.data ? { version: policy.data.version, rules_hash: policy.data.rules_hash, source_text: policy.data.source_text, activated_at: policy.data.activated_at, values: activeDoc ? editableValues(activeDoc) : null } : null,
+    pendingPolicy,
     policyAnchored: !!policy.data && policy.data.rules_hash === onchain.policy_hash && policy.data.version === onchain.policy_version,
     agent: agent.data ? { ...agent.data, walletPubkey: agent.data.near_account ? `ed25519:${agent.data.near_account}` : null } : null,
     totals: {

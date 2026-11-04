@@ -2,7 +2,8 @@
  * POST /api/owner/confirm { txHash }
  * Records an owner action AFTER verifying it on NEAR testnet. Accepted only if
  * the transaction was signed by the contract owner and emitted one of:
- *   buffer: purchase_approved (+ purchase_paid), purchase_rejected, paused, unpaused
+ *   buffer: purchase_approved (+ purchase_paid), purchase_rejected, paused, unpaused,
+ *           policy_anchored, approval_threshold_set
  *   near-outlayer: WalletFrozenChanged for this agent's wallet
  * Anyone may submit a hash; a hash only ever proves what the owner already did.
  */
@@ -12,6 +13,8 @@ import { runDueJobs } from "@/lib/server/agent/runtime";
 import { db } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
 import { fail, json } from "@/lib/server/http";
+import { promoteAnchoredDraft } from "@/lib/server/business";
+import { getConfig } from "@/lib/server/contract";
 import { audit, writeLedger } from "@/lib/server/ledger";
 import { parseEvents, verifyTransaction } from "@/lib/server/near-rpc";
 
@@ -48,6 +51,13 @@ export async function POST(req: Request) {
       recorded.push(e.event);
     } else if (e.event === "purchase_rejected") {
       await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_rejected_by_owner", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId });
+      recorded.push(e.event);
+    } else if (e.event === "policy_anchored") {
+      const promoted = await promoteAnchoredDraft(business.id, await getConfig(), txHash);
+      await writeLedger({ businessId: business.id, eventType: "policy_anchored", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: { version: e.data.version, hash: e.data.hash, activated: promoted !== null } });
+      recorded.push(e.event);
+    } else if (e.event === "approval_threshold_set") {
+      await writeLedger({ businessId: business.id, eventType: "approval_threshold_set", status: "REAL", amountUnits: BigInt(String(e.data.above)), txHash, verifiedOnChain: true, counterparty: near.ownerAccountId });
       recorded.push(e.event);
     } else if (e.event === "paused" || e.event === "unpaused") {
       await db().from("businesses").update({ status: e.event === "paused" ? "paused" : "active" }).eq("id", business.id);
