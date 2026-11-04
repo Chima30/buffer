@@ -10,7 +10,7 @@ import { getConfig, type OnchainConfig } from "./contract";
 import { db, must } from "./db";
 import { nearConfig } from "./env";
 
-export interface ProductRow { id: string; sku: string; title: string; description: string | null; price_units: string; max_expense_units: string; vendor_id: string | null }
+export interface ProductRow { id: string; sku: string; title: string; description: string | null; price_units: string; max_expense_units: string; vendor_id: string | null; kind: "single" | "subscription" }
 export interface VendorRow { id: string; name: string; near_account: string | null; sku: string; unit_price_units: string; chain: "near" | "sepolia"; evm_address: string | null; description: string | null }
 
 export interface BusinessContext {
@@ -37,7 +37,7 @@ export async function loadBusiness(): Promise<BusinessContext> {
   const business = must(await db().from("businesses").select("id,name,contract_id,status").eq("contract_id", contractId).single(), "business");
   const agent = must(await db().from("agents").select("id,near_account,status").eq("business_id", business.id).limit(1).single(), "agent");
   const products = must<ProductRow[]>(
-    await db().from("products").select("id,sku,title,description,price_units,max_expense_units,vendor_id").eq("business_id", business.id).eq("active", true).order("sku"),
+    await db().from("products").select("id,sku,title,description,price_units,max_expense_units,vendor_id,kind").eq("business_id", business.id).eq("active", true).order("sku"),
     "products",
   );
   const vendors = must<VendorRow[]>(await db().from("vendors").select("id,name,near_account,sku,unit_price_units,chain,evm_address,description").eq("business_id", business.id).eq("approved", true).order("name"), "vendors");

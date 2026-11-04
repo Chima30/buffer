@@ -6,7 +6,8 @@
  *           policy_anchored, approval_threshold_set,
  *           evm_purchase_approved / _signed / _rejected, evm_config_set, evm_vendor_set, evm_nonce_set,
  *           refund_topped_up, refund_started, leg_confirmed (refund leg), order_refunded,
- *           treasury_rules_set, gas_reserve_funded, gas_reserve_withdrawn, reserve_withdrawn
+ *           treasury_rules_set, gas_reserve_funded, gas_reserve_withdrawn, reserve_withdrawn,
+ *           product_set, subscription_plan_set, subscription_cancelled (+ subscription_refunded)
  *   near-outlayer: WalletFrozenChanged for this agent's wallet
  * Anyone may submit a hash; a hash only ever proves what the owner already did.
  */
@@ -22,6 +23,9 @@ import { promoteAnchoredDraft } from "@/lib/server/business";
 import { getConfig } from "@/lib/server/contract";
 import { audit, writeLedger } from "@/lib/server/ledger";
 import { parseEvents, verifyTransaction } from "@/lib/server/near-rpc";
+import { reconcile, type SubscriptionRow } from "@/lib/server/subscriptions";
+
+const SUB_COLS = "id,business_id,product_id,topic,customer_account,state,issues_total,issues_started,issue_price_units,onchain_subscription_id,access_token_hash,next_due_at,refund_units,refund_status";
 
 export const maxDuration = 300;
 
@@ -74,6 +78,29 @@ export async function POST(req: Request) {
     } else if (e.event === "treasury_rules_set" || e.event === "gas_reserve_funded" || e.event === "gas_reserve_withdrawn") {
       // NEAR amounts stay in details: amount_units on the ledger is always USDC.
       await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
+      recorded.push(e.event);
+    } else if (e.event === "product_set" || e.event === "subscription_plan_set") {
+      await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
+      recorded.push(e.event);
+    } else if (e.event === "subscription_cancelled") {
+      const sub = (await db().from("subscriptions").select(SUB_COLS).eq("onchain_subscription_id", String(e.data.subscription_id)).maybeSingle()).data as SubscriptionRow | null;
+      if (sub) {
+        const claim = await db().from("subscriptions").update({ cancel_tx: txHash }).eq("id", sub.id).is("cancel_tx", null).select("id");
+        await reconcile(sub);
+        if (!claim.data?.length) continue; // already recorded
+      }
+      const refunded = buffer.some((x) => x.event === "subscription_refunded" && x.data.subscription_id === e.data.subscription_id);
+      const amount = BigInt(String(e.data.refund ?? "0"));
+      await writeLedger({
+        businessId: business.id,
+        eventType: amount > 0n ? "subscription_refunded" : "subscription_cancelled",
+        status: amount > 0n && !refunded ? "PENDING" : "REAL",
+        amountUnits: amount > 0n ? amount : null,
+        counterparty: sub?.customer_account ?? null,
+        txHash: amount > 0n && !refunded ? null : txHash,
+        verifiedOnChain: !(amount > 0n && !refunded),
+        details: { subscription: e.data.subscription_id, cancelled_by: near.ownerAccountId, issues_unstarted: e.data.issues_unstarted },
+      });
       recorded.push(e.event);
     } else if (e.event === "reserve_withdrawn") {
       await writeLedger({ businessId: business.id, eventType: "reserve_withdrawn", status: "REAL", amountUnits: BigInt(String(e.data.amount)), txHash, verifiedOnChain: true, counterparty: String(e.data.to) });

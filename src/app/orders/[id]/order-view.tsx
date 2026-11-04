@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
@@ -19,6 +20,7 @@ interface OrderData {
   state: string;
   priceUnits: string;
   authorised: boolean;
+  subscription: { id: string; issue: number; of: number } | null;
   brief: string | null;
   plan: { title: string; angles: string[]; use_dataset: boolean; dataset_reason: string } | null;
   transitions: { from_state: string | null; to_state: string; reason: string; at: string }[];
@@ -39,6 +41,7 @@ const STAGES: { key: string; label: string; states: string[] }[] = [
 
 const EVENT_LABELS: Record<string, string> = {
   payment_received: "Customer payment received",
+  issue_started: "Issue opened from the subscription escrow",
   intents_quote: "NEAR Intents price quote",
   intents_settlement: "Cross-chain settlement",
   purchase_awaiting_approval: "Dataset purchase waiting for owner approval",
@@ -106,7 +109,17 @@ export function OrderView() {
         <>
           <section className="flex flex-wrap items-end justify-between gap-3">
             <div>
-              <p className="font-mono text-xs text-ink-3">Order {order.onchainOrderId}</p>
+              <p className="font-mono text-xs text-ink-3">
+                Order {order.onchainOrderId}
+                {order.subscription && (
+                  <>
+                    {" · "}
+                    <Link href={`/subscriptions/${order.subscription.id}${token ? `#t=${token}` : ""}`} className="text-accent">
+                      issue {order.subscription.issue} of {order.subscription.of}
+                    </Link>
+                  </>
+                )}
+              </p>
               <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{order.plan?.title ?? order.productTitle ?? "Weekly Market Brief"}</h1>
             </div>
             <Money units={order.priceUnits} className="text-lg" />
@@ -234,7 +247,7 @@ function PaymentPanel({ order, token, onPaid }: { order: OrderData; token: strin
       <h2 className="font-medium">Pay <Money units={order.priceUnits} /> to the business contract</h2>
       <p className="mt-1 text-sm text-ink-3">The payment goes into escrow at <span className="font-mono">{order.contractId}</span>, never to the agent. Wrong amounts are returned automatically.</p>
       <button type="button" onClick={payWithWallet} disabled={paying} className="mt-4 w-full rounded-md bg-ink px-4 py-2.5 text-sm font-medium text-paper disabled:opacity-60 sm:w-auto">
-        {wallet.signedAccountId ? (paying ? "Waiting for wallet…" : `Pay 20 USDC from ${wallet.signedAccountId}`) : "Connect a NEAR testnet wallet to pay"}
+        {wallet.signedAccountId ? (paying ? "Waiting for wallet…" : `Pay ${(Number(order.priceUnits) / 1e6).toFixed(2)} USDC from ${wallet.signedAccountId}`) : "Connect a NEAR testnet wallet to pay"}
       </button>
       <p className="mt-2 text-xs text-ink-3">Your account needs testnet USDC (free at faucet.circle.com, network NEAR Testnet) and a little testnet NEAR for fees.</p>
 

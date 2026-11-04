@@ -36,6 +36,7 @@ export async function POST(req: Request) {
   if (base.business.status !== "active") return fail(409, "The business is paused and not taking orders");
   const chosen = parsed.data.sku ? base.products.find((p) => p.sku === parsed.data.sku) : base.product;
   if (!chosen) return fail(404, "No such product");
+  if (chosen.kind === "subscription") return fail(400, "That product is sold as a subscription; subscribe from the store instead");
   const ctx = { ...base, ...scopeFor(base, chosen.id) };
 
   const near = nearConfig();

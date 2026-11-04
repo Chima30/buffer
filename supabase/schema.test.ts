@@ -23,7 +23,9 @@ const sql =
   "\n" +
   readFileSync(new URL("./migrations/20261104040000_rate_limits.sql", import.meta.url), "utf8") +
   "\n" +
-  readFileSync(new URL("./migrations/20261104050000_treasury.sql", import.meta.url), "utf8");
+  readFileSync(new URL("./migrations/20261104050000_treasury.sql", import.meta.url), "utf8") +
+  "\n" +
+  readFileSync(new URL("./migrations/20261104060000_subscriptions.sql", import.meta.url), "utf8");
 
 let db: PGlite;
 let biz: string;
@@ -127,5 +129,24 @@ describe("schema", () => {
     expect(await hit()).toBe(2);
     const other = (await db.query<{ hit_rate_limit: number }>(`select hit_rate_limit('k1', '2026-11-04T11:00:00Z')`)).rows[0].hit_rate_limit;
     expect(other).toBe(1);
+  });
+
+  it("keeps subscriptions private, bounded and one order per issue", async () => {
+    const product = (await db.query<{ id: string }>(`select id from products where sku = 'weekly-market-brief'`)).rows[0].id;
+    const sub = (await db.query<{ id: string }>(
+      `insert into subscriptions (business_id, product_id, topic, issues_total, issue_price_units, onchain_subscription_id, access_token_hash)
+       values ($1, $2, 'NEAR stablecoin activity', 2, 10000000, 's-1', 'h') returning id`, [biz, product])).rows[0].id;
+    await fails(`update subscriptions set issues_started = 3 where id = $1`, [sub]);
+    const issue = (n: number) => db.query(
+      `insert into orders (business_id, product_id, brief, price_units, onchain_order_id, access_token_hash, deadline_at, subscription_id, issue_number)
+       values ($1, $2, 'NEAR stablecoin activity', 10000000, $3, 'h', now() + interval '1 day', $4, $5)`, [biz, product, `s-1-${n}-${Math.random()}`, sub, n]);
+    await issue(1);
+    await expect(issue(1)).rejects.toThrow();
+    await db.exec(`set role anon`);
+    try {
+      await fails(`select * from subscriptions`);
+    } finally {
+      await db.exec(`reset role`);
+    }
   });
 });

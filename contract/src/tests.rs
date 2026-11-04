@@ -35,15 +35,33 @@ fn ctx(predecessor: AccountId) -> VMContextBuilder {
 /// Demo setup: 20 USDC product, 13 USDC expense cap, approval above 10 USDC.
 fn setup() -> Contract {
     testing_env!(ctx(owner()).build());
-    let mut c = Contract::new(owner(), agent(), token(), acct("payout.testnet"), acct("contrib.testnet"), 3000, U128(10 * USDC), 3_600_000_000_000);
-    c.set_product("weekly-market-brief".into(), U128(20 * USDC), U128(13 * USDC), true);
+    let mut c = Contract::new(
+        owner(),
+        agent(),
+        token(),
+        acct("payout.testnet"),
+        acct("contrib.testnet"),
+        3000,
+        U128(10 * USDC),
+        3_600_000_000_000,
+    );
+    c.set_product(
+        "weekly-market-brief".into(),
+        U128(20 * USDC),
+        U128(13 * USDC),
+        true,
+    );
     c.set_vendor(vendor(), true);
     c
 }
 
 fn pay(c: &mut Contract, order: &str, amount: u128) -> U128 {
     testing_env!(ctx(token()).build());
-    match c.ft_on_transfer(acct("customer.testnet"), U128(amount), format!(r#"{{"order_id":"{order}","sku":"weekly-market-brief"}}"#)) {
+    match c.ft_on_transfer(
+        acct("customer.testnet"),
+        U128(amount),
+        format!(r#"{{"order_id":"{order}","sku":"weekly-market-brief"}}"#),
+    ) {
         PromiseOrValue::Value(v) => v,
         PromiseOrValue::Promise(_) => panic!("unexpected promise"),
     }
@@ -61,22 +79,43 @@ fn as_owner<T>(f: impl FnOnce() -> T) -> T {
 fn resolve_leg(c: &mut Contract, order: &str, leg: u32, ok: bool) {
     // #[callback_result] arguments are plain parameters when called directly in unit tests.
     testing_env!(ctx(contract_id()).build());
-    c.on_leg_resolved(order.into(), leg, if ok { Ok(()) } else { Err(PromiseError::Failed) });
+    c.on_leg_resolved(
+        order.into(),
+        leg,
+        if ok {
+            Ok(())
+        } else {
+            Err(PromiseError::Failed)
+        },
+    );
 }
 
 fn resolve_purchase(c: &mut Contract, order: &str, idx: u32, ok: bool) {
     testing_env!(ctx(contract_id()).build());
-    c.on_purchase_resolved(order.into(), idx, if ok { Ok(()) } else { Err(PromiseError::Failed) });
+    c.on_purchase_resolved(
+        order.into(),
+        idx,
+        if ok {
+            Ok(())
+        } else {
+            Err(PromiseError::Failed)
+        },
+    );
 }
 
 fn inference(amount: u128) -> Vec<ExpenseClaim> {
-    vec![ExpenseClaim { category: ExpenseCategory::Inference, amount: U128(amount), evidence_ref: "chat:abc".into() }]
+    vec![ExpenseClaim {
+        category: ExpenseCategory::Inference,
+        amount: U128(amount),
+        evidence_ref: "chat:abc".into(),
+    }]
 }
 
 /// Paid order with a confirmed, owner-approved 12 USDC vendor purchase.
 fn paid_with_purchase(c: &mut Contract) {
     pay(c, "o-1", 20 * USDC);
-    let r = as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(12 * USDC), "dataset".into()));
+    let r =
+        as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(12 * USDC), "dataset".into()));
     assert!(matches!(r, PromiseOrValue::Value(0)));
     let _ = as_owner(|| c.approve_purchase("o-1".into(), 0));
     resolve_purchase(c, "o-1", 0, true);
@@ -100,22 +139,40 @@ fn split_caps_inference_reimbursement() {
     let s = compute_split(20 * USDC, 13 * USDC, 3000, 12 * USDC, 5 * USDC);
     assert_eq!(s.expenses, 13 * USDC);
     assert_eq!(s.reimb_owner, USDC);
-    assert_eq!(s.vendor_paid + s.reimb_owner + s.owner + s.contributor, 20 * USDC);
+    assert_eq!(
+        s.vendor_paid + s.reimb_owner + s.owner + s.contributor,
+        20 * USDC
+    );
 }
 
 #[test]
 fn split_invariant_holds_for_many_inputs() {
     let mut seed: u64 = 7;
     let mut next = |m: u64| {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        seed = seed
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         (seed >> 33) % m
     };
     for _ in 0..5000 {
         let gross = 1 + next(100_000_000) as u128;
         let cap = (next(100_000_000) as u128).min(gross);
-        let vendor_paid = if cap == 0 { 0 } else { next(cap as u64 + 1) as u128 };
-        let s = compute_split(gross, cap, next(10_001) as u16, vendor_paid, next(50_000_000) as u128);
-        assert_eq!(s.vendor_paid + s.reimb_owner + s.owner + s.contributor, gross);
+        let vendor_paid = if cap == 0 {
+            0
+        } else {
+            next(cap as u64 + 1) as u128
+        };
+        let s = compute_split(
+            gross,
+            cap,
+            next(10_001) as u16,
+            vendor_paid,
+            next(50_000_000) as u128,
+        );
+        assert_eq!(
+            s.vendor_paid + s.reimb_owner + s.owner + s.contributor,
+            gross
+        );
         assert!(s.expenses <= cap);
     }
 }
@@ -150,7 +207,11 @@ fn rejects_payment_while_paused_and_bad_messages() {
 fn rejects_other_tokens() {
     let mut c = setup();
     testing_env!(ctx(acct("usdc.fakes.testnet")).build());
-    let _ = c.ft_on_transfer(acct("customer.testnet"), U128(20 * USDC), r#"{"order_id":"o-1","sku":"weekly-market-brief"}"#.into());
+    let _ = c.ft_on_transfer(
+        acct("customer.testnet"),
+        U128(20 * USDC),
+        r#"{"order_id":"o-1","sku":"weekly-market-brief"}"#.into(),
+    );
 }
 
 // ---------- procurement ----------
@@ -159,22 +220,36 @@ fn rejects_other_tokens() {
 fn small_purchase_pays_immediately() {
     let mut c = setup();
     pay(&mut c, "o-1", 20 * USDC);
-    let r = as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(5 * USDC), "dataset".into()));
+    let r =
+        as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(5 * USDC), "dataset".into()));
     assert!(matches!(r, PromiseOrValue::Promise(_)));
-    assert_eq!(c.get_order("o-1".into()).unwrap().purchases[0].status, PurchaseStatus::Sending);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().purchases[0].status,
+        PurchaseStatus::Sending
+    );
     resolve_purchase(&mut c, "o-1", 0, true);
-    assert_eq!(c.get_order("o-1".into()).unwrap().purchases[0].status, PurchaseStatus::Paid);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().purchases[0].status,
+        PurchaseStatus::Paid
+    );
 }
 
 #[test]
 fn large_purchase_waits_for_owner_approval() {
     let mut c = setup();
     pay(&mut c, "o-1", 20 * USDC);
-    let r = as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(12 * USDC), "dataset".into()));
+    let r =
+        as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(12 * USDC), "dataset".into()));
     assert!(matches!(r, PromiseOrValue::Value(0)));
-    assert_eq!(c.get_order("o-1".into()).unwrap().purchases[0].status, PurchaseStatus::AwaitingApproval);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().purchases[0].status,
+        PurchaseStatus::AwaitingApproval
+    );
     let _ = as_owner(|| c.approve_purchase("o-1".into(), 0));
-    assert_eq!(c.get_order("o-1".into()).unwrap().purchases[0].status, PurchaseStatus::Sending);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().purchases[0].status,
+        PurchaseStatus::Sending
+    );
 }
 
 #[test]
@@ -182,7 +257,14 @@ fn large_purchase_waits_for_owner_approval() {
 fn unapproved_vendor_is_blocked() {
     let mut c = setup();
     pay(&mut c, "o-1", 20 * USDC);
-    let _ = as_agent(|| c.request_purchase("o-1".into(), acct("attacker.testnet"), U128(USDC), "x".into()));
+    let _ = as_agent(|| {
+        c.request_purchase(
+            "o-1".into(),
+            acct("attacker.testnet"),
+            U128(USDC),
+            "x".into(),
+        )
+    });
 }
 
 #[test]
@@ -205,7 +287,14 @@ fn failed_and_rejected_purchases_free_the_cap() {
     let _ = as_agent(|| c.request_purchase("o-1".into(), vendor(), U128(9 * USDC), "c".into()));
     let o = c.get_order("o-1".into()).unwrap();
     let statuses: Vec<_> = o.purchases.iter().map(|p| p.status).collect();
-    assert_eq!(statuses, vec![PurchaseStatus::Failed, PurchaseStatus::Rejected, PurchaseStatus::Sending]);
+    assert_eq!(
+        statuses,
+        vec![
+            PurchaseStatus::Failed,
+            PurchaseStatus::Rejected,
+            PurchaseStatus::Sending
+        ]
+    );
 }
 
 #[test]
@@ -262,11 +351,21 @@ fn full_settlement_lifecycle() {
     let o = c.get_order("o-1".into()).unwrap();
     assert_eq!(o.state, OrderState::Settling);
     let legs: Vec<(LegKind, u128)> = o.legs.iter().map(|l| (l.kind, l.amount.0)).collect();
-    assert_eq!(legs, vec![(LegKind::Owner, 5_320_000), (LegKind::Contributor, 2_280_000), (LegKind::ReimbOwner, 400_000)]);
+    assert_eq!(
+        legs,
+        vec![
+            (LegKind::Owner, 5_320_000),
+            (LegKind::Contributor, 2_280_000),
+            (LegKind::ReimbOwner, 400_000)
+        ]
+    );
     for i in 0..3 {
         resolve_leg(&mut c, "o-1", i, true);
     }
-    assert_eq!(c.get_order("o-1".into()).unwrap().state, OrderState::Settled);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().state,
+        OrderState::Settled
+    );
 }
 
 #[test]
@@ -275,7 +374,11 @@ fn settle_rejects_supplier_claims() {
     let mut c = setup();
     paid_with_purchase(&mut c);
     as_agent(|| c.mark_fulfilled("o-1".into(), "a".repeat(64)));
-    let claims = vec![ExpenseClaim { category: ExpenseCategory::Supplier, amount: U128(USDC), evidence_ref: "x".into() }];
+    let claims = vec![ExpenseClaim {
+        category: ExpenseCategory::Supplier,
+        amount: U128(USDC),
+        evidence_ref: "x".into(),
+    }];
     as_agent(|| c.settle("o-1".into(), claims));
 }
 
@@ -312,7 +415,10 @@ fn failed_leg_can_be_retried_alone() {
     let _ = as_agent(|| c.retry_leg("o-1".into(), 1));
     assert_eq!(c.get_order("o-1".into()).unwrap().legs[1].attempts, 2);
     resolve_leg(&mut c, "o-1", 1, true);
-    assert_eq!(c.get_order("o-1".into()).unwrap().state, OrderState::Settled);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().state,
+        OrderState::Settled
+    );
 }
 
 #[test]
@@ -337,7 +443,10 @@ fn refund_without_purchases_returns_full_gross() {
     assert_eq!(o.legs[0].amount, U128(20 * USDC));
     assert_eq!(o.legs[0].recipient, acct("customer.testnet"));
     resolve_leg(&mut c, "o-1", 0, true);
-    assert_eq!(c.get_order("o-1".into()).unwrap().state, OrderState::Refunded);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().state,
+        OrderState::Refunded
+    );
 }
 
 #[test]
@@ -346,10 +455,17 @@ fn refund_after_vendor_spend_needs_owner_top_up_to_be_whole() {
     paid_with_purchase(&mut c);
     // Owner tops up the 12 USDC spent on the vendor.
     testing_env!(ctx(token()).build());
-    let r = c.ft_on_transfer(owner(), U128(12 * USDC), r#"{"refund_top_up":"o-1"}"#.into());
+    let r = c.ft_on_transfer(
+        owner(),
+        U128(12 * USDC),
+        r#"{"refund_top_up":"o-1"}"#.into(),
+    );
     assert!(matches!(r, PromiseOrValue::Value(U128(0))));
     let _ = as_owner(|| c.refund("o-1".into()));
-    assert_eq!(c.get_order("o-1".into()).unwrap().legs[0].amount, U128(20 * USDC));
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().legs[0].amount,
+        U128(20 * USDC)
+    );
 }
 
 #[test]
@@ -357,8 +473,15 @@ fn refund_without_top_up_returns_what_escrow_holds() {
     let mut c = setup();
     paid_with_purchase(&mut c);
     let _ = as_owner(|| c.refund("o-1".into()));
-    assert_eq!(c.get_order("o-1".into()).unwrap().legs[0].amount, U128(8 * USDC));
-    assert!(get_logs().iter().any(|l| l.contains("refund_started") && l.contains("\"shortfall\":\"12000000\"")));
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().legs[0].amount,
+        U128(8 * USDC)
+    );
+    assert!(
+        get_logs()
+            .iter()
+            .any(|l| l.contains("refund_started") && l.contains("\"shortfall\":\"12000000\""))
+    );
 }
 
 #[test]
@@ -366,7 +489,11 @@ fn only_owner_can_top_up() {
     let mut c = setup();
     pay(&mut c, "o-1", 20 * USDC);
     testing_env!(ctx(token()).build());
-    let r = c.ft_on_transfer(acct("stranger.testnet"), U128(USDC), r#"{"refund_top_up":"o-1"}"#.into());
+    let r = c.ft_on_transfer(
+        acct("stranger.testnet"),
+        U128(USDC),
+        r#"{"refund_top_up":"o-1"}"#.into(),
+    );
     assert!(matches!(r, PromiseOrValue::Value(U128(v)) if v == USDC));
 }
 
@@ -378,7 +505,10 @@ fn anyone_can_refund_after_deadline_only() {
     late.block_timestamp(1_000 + 3_600_000_000_001);
     testing_env!(late.build());
     let _ = c.refund("o-1".into());
-    assert_eq!(c.get_order("o-1".into()).unwrap().state, OrderState::Refunding);
+    assert_eq!(
+        c.get_order("o-1".into()).unwrap().state,
+        OrderState::Refunding
+    );
 }
 
 #[test]
@@ -471,28 +601,51 @@ fn evm_setup() -> Contract {
 }
 
 fn evm_request(c: &mut Contract, vendor: &str, amount: u128, fee: u128) -> PromiseOrValue<u32> {
-    as_agent(|| c.request_evm_purchase("o-1".into(), vendor.into(), U128(amount), U128(fee), U128(GWEI)))
+    as_agent(|| {
+        c.request_evm_purchase(
+            "o-1".into(),
+            vendor.into(),
+            U128(amount),
+            U128(fee),
+            U128(GWEI),
+        )
+    })
 }
 
 fn mpc_reply(c: &mut Contract, idx: u32, ok: bool) {
     testing_env!(ctx(contract_id()).build());
     let v = serde_json::json!({ "scheme": "Secp256k1", "big_r": { "affine_point": format!("02{}", "11".repeat(32)) }, "s": { "scalar": "22".repeat(32) }, "recovery_id": 1 });
-    c.on_evm_signed("o-1".into(), idx, if ok { Ok(v) } else { Err(PromiseError::Failed) });
+    c.on_evm_signed(
+        "o-1".into(),
+        idx,
+        if ok { Ok(v) } else { Err(PromiseError::Failed) },
+    );
 }
 
 #[test]
 fn small_evm_purchase_is_built_and_sent_for_signing() {
     let mut c = evm_setup();
-    assert!(matches!(evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI), PromiseOrValue::Promise(_)));
+    assert!(matches!(
+        evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI),
+        PromiseOrValue::Promise(_)
+    ));
     let p = &c.get_evm_purchases("o-1".into())[0];
     assert_eq!(p.status, EvmPurchaseStatus::Signing);
     assert_eq!(p.nonce, Some(0));
     assert_eq!(c.get_evm_nonce(), 1);
     // The hash the MPC signs is keccak256 of the transaction the contract built.
     let tx = c.get_evm_unsigned_tx("o-1".into(), 0).unwrap();
-    let bytes: Vec<u8> = (0..tx.len()).step_by(2).map(|i| u8::from_str_radix(&tx[i..i + 2], 16).unwrap()).collect();
-    assert_eq!(p.payload_hash.clone().unwrap(), evm::to_hex(&env::keccak256(&bytes)));
-    assert!(tx.contains("a9059cbb00000000000000000000000000000000000000000000000000000000000000aa"));
+    let bytes: Vec<u8> = (0..tx.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&tx[i..i + 2], 16).unwrap())
+        .collect();
+    assert_eq!(
+        p.payload_hash.clone().unwrap(),
+        evm::to_hex(&env::keccak256(&bytes))
+    );
+    assert!(
+        tx.contains("a9059cbb00000000000000000000000000000000000000000000000000000000000000aa")
+    );
     mpc_reply(&mut c, 0, true);
     let p = &c.get_evm_purchases("o-1".into())[0];
     assert_eq!(p.status, EvmPurchaseStatus::Signed);
@@ -518,7 +671,13 @@ fn evm_gas_fee_is_capped() {
 fn owner_path_cannot_be_used_by_strangers_to_request() {
     let mut c = evm_setup();
     testing_env!(ctx(acct("mallory.testnet")).build());
-    let _ = c.request_evm_purchase("o-1".into(), EVM_VENDOR.into(), U128(USDC), U128(GWEI), U128(GWEI));
+    let _ = c.request_evm_purchase(
+        "o-1".into(),
+        EVM_VENDOR.into(),
+        U128(USDC),
+        U128(GWEI),
+        U128(GWEI),
+    );
 }
 
 #[test]
@@ -531,9 +690,15 @@ fn agent_cannot_approve_evm_vendors() {
 #[test]
 fn large_evm_purchase_waits_for_the_owner_and_nonce_is_assigned_on_approval() {
     let mut c = evm_setup();
-    assert!(matches!(evm_request(&mut c, EVM_VENDOR, 12 * USDC, 30 * GWEI), PromiseOrValue::Value(0)));
+    assert!(matches!(
+        evm_request(&mut c, EVM_VENDOR, 12 * USDC, 30 * GWEI),
+        PromiseOrValue::Value(0)
+    ));
     let p = &c.get_evm_purchases("o-1".into())[0];
-    assert_eq!((p.status.clone(), p.nonce), (EvmPurchaseStatus::AwaitingApproval, None));
+    assert_eq!(
+        (p.status.clone(), p.nonce),
+        (EvmPurchaseStatus::AwaitingApproval, None)
+    );
     assert_eq!(c.get_evm_nonce(), 0);
     let _ = as_owner(|| c.approve_evm_purchase("o-1".into(), 0));
     assert_eq!(c.get_evm_purchases("o-1".into())[0].nonce, Some(0));
@@ -552,7 +717,10 @@ fn failed_signature_returns_the_nonce_and_frees_the_cap() {
     let mut c = evm_setup();
     let _ = evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI);
     mpc_reply(&mut c, 0, false);
-    assert_eq!(c.get_evm_purchases("o-1".into())[0].status, EvmPurchaseStatus::Failed);
+    assert_eq!(
+        c.get_evm_purchases("o-1".into())[0].status,
+        EvmPurchaseStatus::Failed
+    );
     assert_eq!(c.get_evm_nonce(), 0);
     let _ = evm_request(&mut c, EVM_VENDOR, 10 * USDC, 30 * GWEI);
     assert_eq!(c.get_evm_purchases("o-1".into())[1].nonce, Some(0));
@@ -574,12 +742,21 @@ fn settlement_reimburses_the_owner_for_signed_evm_purchases() {
     as_agent(|| c.mark_fulfilled("o-1".into(), "ab".repeat(32)));
     as_agent(|| c.settle("o-1".into(), inference(1_000)));
     let o = c.get_order("o-1".into()).unwrap();
-    let amt = |k: LegKind| o.legs.iter().find(|l| l.kind == k).map(|l| l.amount.0).unwrap_or(0);
+    let amt = |k: LegKind| {
+        o.legs
+            .iter()
+            .find(|l| l.kind == k)
+            .map(|l| l.amount.0)
+            .unwrap_or(0)
+    };
     // E = 5 + 0.001 = 5.001; D = 14.999; C = 4.4997; O = 10.4993; reimb = 5.001
     assert_eq!(amt(LegKind::ReimbOwner), 5_001_000);
     assert_eq!(amt(LegKind::Contributor), 4_499_700);
     assert_eq!(amt(LegKind::Owner), 10_499_300);
-    assert_eq!(amt(LegKind::ReimbOwner) + amt(LegKind::Contributor) + amt(LegKind::Owner), 20 * USDC);
+    assert_eq!(
+        amt(LegKind::ReimbOwner) + amt(LegKind::Contributor) + amt(LegKind::Owner),
+        20 * USDC
+    );
 }
 
 #[test]
@@ -591,10 +768,53 @@ fn migrate_keeps_existing_state() {
     c.orders.flush();
     c.evm_vendors.flush();
     c.evm_purchases.flush();
-    // Rebuild the pre-treasury layout from the same collections, write it, then migrate.
-    let Contract { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, products, vendors, orders, evm, evm_vendors, evm_purchases, evm_nonce, .. } = c;
-    let v2 = ContractV2 { owner, agent, token_id, owner_payout, contributor, contributor_bps, purchase_approval_above, order_ttl_ns, paused, policy_version: 3, policy_hash: Some("ab".repeat(32)), products, vendors, orders, evm, evm_vendors, evm_purchases, evm_nonce };
-    env::state_write(&v2);
+    let treasury = Treasury {
+        reserve_bps: 1000,
+        reserve_balance: U128(7),
+        ..Treasury::default()
+    };
+    // Rebuild the pre-subscriptions layout from the same collections, write it, then migrate.
+    let Contract {
+        owner,
+        agent,
+        token_id,
+        owner_payout,
+        contributor,
+        contributor_bps,
+        purchase_approval_above,
+        order_ttl_ns,
+        paused,
+        products,
+        vendors,
+        orders,
+        evm,
+        evm_vendors,
+        evm_purchases,
+        evm_nonce,
+        ..
+    } = c;
+    let v3 = ContractV3 {
+        owner,
+        agent,
+        token_id,
+        owner_payout,
+        contributor,
+        contributor_bps,
+        purchase_approval_above,
+        order_ttl_ns,
+        paused,
+        policy_version: 3,
+        policy_hash: Some("ab".repeat(32)),
+        products,
+        vendors,
+        orders,
+        evm,
+        evm_vendors,
+        evm_purchases,
+        evm_nonce,
+        treasury: treasury.clone(),
+    };
+    env::state_write(&v3);
     testing_env!(ctx(contract_id()).build());
     let m = Contract::migrate();
     assert_eq!(m.get_config().policy_version, 3);
@@ -604,7 +824,9 @@ fn migrate_keeps_existing_state() {
     assert_eq!(m.get_evm_vendors().len(), 1);
     assert_eq!(m.get_evm_purchases("o-1".into()).len(), 1);
     assert_eq!(m.get_evm_nonce(), 1);
-    assert_eq!(m.get_treasury(), Treasury::default());
+    assert_eq!(m.get_treasury(), treasury);
+    assert!(m.get_subscription_plans().is_empty());
+    assert!(m.get_subscription("s-1".into()).is_none());
 }
 
 // ---------- self-funding treasury ----------
@@ -622,7 +844,13 @@ fn settle_plain(c: &mut Contract, order: &str) {
 }
 
 fn leg(c: &Contract, order: &str, k: LegKind) -> u128 {
-    c.get_order(order.into()).unwrap().legs.iter().find(|l| l.kind == k).map(|l| l.amount.0).unwrap_or(0)
+    c.get_order(order.into())
+        .unwrap()
+        .legs
+        .iter()
+        .find(|l| l.kind == k)
+        .map(|l| l.amount.0)
+        .unwrap_or(0)
 }
 
 #[test]
@@ -638,7 +866,14 @@ fn reserve_comes_out_of_the_owner_share_only() {
     assert_eq!(o.legs.iter().map(|l| l.amount.0).sum::<u128>(), 20 * USDC);
     assert_eq!(c.get_treasury().reserve_balance, U128(1_372_000));
     // The reserve leg is never sent, so it is already confirmed.
-    assert_eq!(o.legs.iter().find(|l| l.kind == LegKind::Reserve).unwrap().status, LegStatus::Confirmed);
+    assert_eq!(
+        o.legs
+            .iter()
+            .find(|l| l.kind == LegKind::Reserve)
+            .unwrap()
+            .status,
+        LegStatus::Confirmed
+    );
 }
 
 #[test]
@@ -670,12 +905,16 @@ fn refunds_use_the_reserve_before_asking_the_owner() {
     let _ = as_owner(|| c.refund("o-2".into()));
     let o = c.get_order("o-2".into()).unwrap();
     assert_eq!(o.legs[0].amount, U128(20 * USDC));
-    assert_eq!(c.get_treasury().reserve_balance, U128(13_720_000 - 12 * USDC));
+    assert_eq!(
+        c.get_treasury().reserve_balance,
+        U128(13_720_000 - 12 * USDC)
+    );
 }
 
 fn paid_with_purchase_on(c: &mut Contract, order: &str) {
     pay(c, order, 20 * USDC);
-    let _ = as_agent(|| c.request_purchase(order.into(), vendor(), U128(12 * USDC), "dataset".into()));
+    let _ =
+        as_agent(|| c.request_purchase(order.into(), vendor(), U128(12 * USDC), "dataset".into()));
     let _ = as_owner(|| c.approve_purchase(order.into(), 0));
     resolve_purchase(c, order, 0, true);
 }
@@ -684,7 +923,11 @@ fn paid_with_purchase_on(c: &mut Contract, order: &str) {
 fn gas_refills_are_capped_per_week() {
     let mut c = setup();
     with_reserve(&mut c, 0, 0);
-    testing_env!(ctx(owner()).attached_deposit(NearToken::from_yoctonear(5 * NEAR)).build());
+    testing_env!(
+        ctx(owner())
+            .attached_deposit(NearToken::from_yoctonear(5 * NEAR))
+            .build()
+    );
     c.fund_gas_reserve();
     for _ in 0..4 {
         let _ = as_agent(|| c.refill_agent_gas());
@@ -698,7 +941,11 @@ fn gas_refills_are_capped_per_week() {
 fn gas_refill_beyond_the_cap_is_refused() {
     let mut c = setup();
     with_reserve(&mut c, 0, 0);
-    testing_env!(ctx(owner()).attached_deposit(NearToken::from_yoctonear(5 * NEAR)).build());
+    testing_env!(
+        ctx(owner())
+            .attached_deposit(NearToken::from_yoctonear(5 * NEAR))
+            .build()
+    );
     c.fund_gas_reserve();
     for _ in 0..5 {
         let _ = as_agent(|| c.refill_agent_gas());
@@ -709,7 +956,11 @@ fn gas_refill_beyond_the_cap_is_refused() {
 fn gas_cap_resets_after_a_week() {
     let mut c = setup();
     with_reserve(&mut c, 0, 0);
-    testing_env!(ctx(owner()).attached_deposit(NearToken::from_yoctonear(5 * NEAR)).build());
+    testing_env!(
+        ctx(owner())
+            .attached_deposit(NearToken::from_yoctonear(5 * NEAR))
+            .build()
+    );
     c.fund_gas_reserve();
     for _ in 0..4 {
         let _ = as_agent(|| c.refill_agent_gas());
@@ -750,4 +1001,242 @@ fn reserve_cut_math() {
     assert_eq!(reserve_cut(13_720_000, 1000, 1_000_000, 500_000), 500_000);
     assert_eq!(reserve_cut(13_720_000, 1000, 1_000_000, 2_000_000), 0);
     assert_eq!(reserve_cut(5, 10000, u128::MAX, 0), 5);
+}
+
+// ---------- subscriptions ----------
+
+const HOUR: u64 = 3_600_000_000_000;
+
+fn customer() -> AccountId {
+    acct("customer.testnet")
+}
+
+/// 10 USDC issues, 2..=8 per subscription, one per hour.
+fn sub_setup() -> Contract {
+    let mut c = setup();
+    as_owner(|| {
+        c.set_product(
+            "brief-subscription".into(),
+            U128(10 * USDC),
+            U128(2 * USDC),
+            true,
+        );
+        c.set_subscription_plan("brief-subscription".into(), HOUR, 2, 8, true);
+    });
+    c
+}
+
+fn subscribe(c: &mut Contract, id: &str, issues: u32, amount: u128) -> U128 {
+    testing_env!(ctx(token()).build());
+    match c.ft_on_transfer(
+        customer(),
+        U128(amount),
+        format!(r#"{{"subscription_id":"{id}","sku":"brief-subscription","issues":{issues}}}"#),
+    ) {
+        PromiseOrValue::Value(v) => v,
+        PromiseOrValue::Promise(_) => panic!("unexpected promise"),
+    }
+}
+
+fn at(who: AccountId, ts: u64) {
+    let mut b = ctx(who);
+    b.block_timestamp(ts);
+    testing_env!(b.build());
+}
+
+#[test]
+fn subscription_prepays_exact_issues() {
+    let mut c = sub_setup();
+    assert_eq!(subscribe(&mut c, "s-1", 3, 30 * USDC).0, 0);
+    let s = c.get_subscription("s-1".into()).unwrap();
+    assert_eq!(
+        (s.issues_total, s.issues_started, s.escrow.0, s.state),
+        (3, 0, 30 * USDC, SubscriptionState::Active)
+    );
+    assert!(
+        get_logs()
+            .iter()
+            .any(|l| l.contains("subscription_started"))
+    );
+}
+
+#[test]
+fn subscription_rejects_bad_payments() {
+    let mut c = sub_setup();
+    assert_eq!(subscribe(&mut c, "s-1", 3, 29 * USDC).0, 29 * USDC); // wrong amount
+    assert_eq!(subscribe(&mut c, "s-1", 1, 10 * USDC).0, 10 * USDC); // below min
+    assert_eq!(subscribe(&mut c, "s-1", 9, 90 * USDC).0, 90 * USDC); // above max
+    assert_eq!(
+        subscribe(&mut c, &"s".repeat(61), 2, 20 * USDC).0,
+        20 * USDC
+    ); // id too long for issue ids
+    // A product without a plan cannot be subscribed to.
+    testing_env!(ctx(token()).build());
+    let r = c.ft_on_transfer(
+        customer(),
+        U128(40 * USDC),
+        r#"{"subscription_id":"s-2","sku":"weekly-market-brief","issues":2}"#.into(),
+    );
+    assert!(matches!(r, PromiseOrValue::Value(v) if v.0 == 40 * USDC));
+    assert!(c.get_subscription("s-1".into()).is_none());
+    assert_eq!(subscribe(&mut c, "s-1", 2, 20 * USDC).0, 0);
+    assert_eq!(subscribe(&mut c, "s-1", 2, 20 * USDC).0, 20 * USDC); // duplicate
+    as_owner(|| c.pause());
+    assert_eq!(subscribe(&mut c, "s-3", 2, 20 * USDC).0, 20 * USDC);
+}
+
+#[test]
+fn issues_open_on_schedule_as_normal_orders() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 2, 20 * USDC);
+    at(agent(), 1_000);
+    assert_eq!(c.start_issue("s-1".into()), "s-1-1");
+    let o = c.get_order("s-1-1".into()).unwrap();
+    assert_eq!(
+        (o.customer.clone(), o.gross.0, o.state, o.sku.as_str()),
+        (
+            customer(),
+            10 * USDC,
+            OrderState::Paid,
+            "brief-subscription"
+        )
+    );
+    assert_eq!(
+        c.get_subscription("s-1".into()).unwrap().escrow.0,
+        10 * USDC
+    );
+    // The issue settles like any order.
+    as_agent(|| c.mark_fulfilled("s-1-1".into(), "ab".repeat(32)));
+    as_agent(|| c.settle("s-1-1".into(), inference(500_000)));
+    let legs = c.get_order("s-1-1".into()).unwrap().legs;
+    assert_eq!(legs.iter().map(|l| l.amount.0).sum::<u128>(), 10 * USDC);
+    // Second issue only after the interval.
+    at(agent(), 1_000 + HOUR);
+    assert_eq!(c.start_issue("s-1".into()), "s-1-2");
+    let s = c.get_subscription("s-1".into()).unwrap();
+    assert_eq!(
+        (s.issues_started, s.escrow.0, s.state),
+        (2, 0, SubscriptionState::Completed)
+    );
+}
+
+#[test]
+#[should_panic(expected = "next issue is not due yet")]
+fn issue_cannot_open_early() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 3, 30 * USDC);
+    at(agent(), 1_000);
+    c.start_issue("s-1".into());
+    at(agent(), 1_000 + HOUR - 1);
+    c.start_issue("s-1".into());
+}
+
+#[test]
+#[should_panic(expected = "subscription is not active")]
+fn completed_subscription_opens_nothing() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 2, 20 * USDC);
+    at(agent(), 1_000);
+    c.start_issue("s-1".into());
+    at(agent(), 1_000 + HOUR);
+    c.start_issue("s-1".into());
+    at(agent(), 1_000 + 2 * HOUR);
+    c.start_issue("s-1".into());
+}
+
+#[test]
+#[should_panic(expected = "agent only")]
+fn only_agent_opens_issues() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 2, 20 * USDC);
+    at(customer(), 1_000);
+    c.start_issue("s-1".into());
+}
+
+#[test]
+#[should_panic(expected = "paused")]
+fn paused_business_opens_no_issues() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 2, 20 * USDC);
+    as_owner(|| c.pause());
+    at(agent(), 1_000);
+    c.start_issue("s-1".into());
+}
+
+#[test]
+fn cancel_refunds_exactly_the_unstarted_issues() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 4, 40 * USDC);
+    at(agent(), 1_000);
+    c.start_issue("s-1".into());
+    as_owner(|| c.pause()); // cancelling still works while paused
+    at(customer(), 2_000);
+    c.cancel_subscription("s-1".into());
+    let s = c.get_subscription("s-1".into()).unwrap();
+    assert_eq!(s.state, SubscriptionState::Cancelled);
+    assert_eq!(s.escrow.0, 0);
+    let leg = s.refund.unwrap();
+    assert_eq!(
+        (leg.recipient, leg.amount.0, leg.status),
+        (customer(), 30 * USDC, LegStatus::Pending)
+    );
+    // The started issue is untouched.
+    assert_eq!(c.get_order("s-1-1".into()).unwrap().state, OrderState::Paid);
+    testing_env!(ctx(contract_id()).build());
+    c.on_subscription_refunded("s-1".into(), Ok(()));
+    assert_eq!(
+        c.get_subscription("s-1".into())
+            .unwrap()
+            .refund
+            .unwrap()
+            .status,
+        LegStatus::Confirmed
+    );
+}
+
+#[test]
+fn failed_subscription_refund_can_be_retried() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 2, 20 * USDC);
+    as_owner(|| c.cancel_subscription("s-1".into()));
+    testing_env!(ctx(contract_id()).build());
+    c.on_subscription_refunded("s-1".into(), Err(PromiseError::Failed));
+    assert_eq!(
+        c.get_subscription("s-1".into())
+            .unwrap()
+            .refund
+            .unwrap()
+            .status,
+        LegStatus::Failed
+    );
+    at(customer(), 2_000);
+    let _ = c.retry_subscription_refund("s-1".into());
+    let leg = c.get_subscription("s-1".into()).unwrap().refund.unwrap();
+    assert_eq!((leg.status, leg.attempts), (LegStatus::Pending, 2));
+}
+
+#[test]
+#[should_panic(expected = "customer or owner only")]
+fn strangers_cannot_cancel() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 2, 20 * USDC);
+    at(agent(), 1_000);
+    c.cancel_subscription("s-1".into());
+}
+
+#[test]
+#[should_panic(expected = "subscription is not active")]
+fn cancelled_subscription_opens_no_issues() {
+    let mut c = sub_setup();
+    subscribe(&mut c, "s-1", 2, 20 * USDC);
+    as_owner(|| c.cancel_subscription("s-1".into()));
+    at(agent(), 1_000);
+    c.start_issue("s-1".into());
+}
+
+#[test]
+#[should_panic(expected = "owner only")]
+fn only_owner_sets_plans() {
+    let mut c = sub_setup();
+    as_agent(|| c.set_subscription_plan("brief-subscription".into(), 1, 1, 52, true));
 }

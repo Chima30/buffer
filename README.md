@@ -75,6 +75,17 @@ The business pays its own running costs from its revenue, under rules only the o
 
 Only the owner can change the rules or withdraw (`withdraw_reserve`, `withdraw_gas_reserve`). The agent can only trigger a refill, within the caps.
 
+## Subscriptions
+
+A customer can prepay a series of briefs on one topic in a single payment, and the business delivers them on schedule by itself:
+
+- **One payment, held by the contract.** The customer pays for 2 to 8 issues at 10 USDC each with one `ft_transfer_call`. The money sits in the subscription's own escrow in the contract, not with the agent.
+- **The contract decides when an issue is due.** The agent calls `start_issue`, which moves exactly one issue's price into a new ordinary order for the same customer. It refuses if the issue is early, the subscription is used up or cancelled, or the business is paused. The owner sets the pace with `set_subscription_plan`: weekly in production, every hour on testnet so a demo can show two issues.
+- **Each issue is a normal order.** It goes through the same policy checks, TEE-signed inference, on-chain report hash, 70/30 settlement and reserve. Each issue builds on the earlier ones. Subscription issues are priced for inference only and never buy a dataset.
+- **Cancel any time.** The customer or the owner signs `cancel_subscription`, and the contract sends every unstarted issue's money straight back to the customer. Issues already started still finish. Cancelling works even while the business is paused.
+
+Revenue counts one issue at a time, when it opens. Money still in escrow is the customer's.
+
 ## Chain Signatures (Ethereum Sepolia)
 
 The contract owns an Ethereum address derived by NEAR's MPC network (`v1.signer-prod.testnet`, path `buffer-treasury`). No one holds its private key. A cross-chain purchase works like this:
@@ -119,7 +130,7 @@ near contract call-function as-read-only buffer-john-desk.testnet get_order json
 
 ## Stack and code
 
-- **Contract.** `contract/` is Rust with near-sdk 5. It has 59 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
+- **Contract.** `contract/` is Rust with near-sdk 5. It has 71 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
 - **App.** Next.js 16 on Vercel with Supabase. Row-level security denies all public access, the ledger is append-only, and job leases use `FOR UPDATE SKIP LOCKED`. Supabase Cron calls `/api/runtime/tick` every minute.
 - **Deterministic core.** `src/lib/domain/` holds the policy engine, the revenue mirror of the contract formula, the order state machine and the policy builder's checks. Tests: `npm test`.
 - **Integrations.** `src/lib/server/` contains:

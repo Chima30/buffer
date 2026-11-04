@@ -19,6 +19,13 @@ interface Overview {
     agentGasYocto: string | null; ethereumShortfall: string;
     refills: { tx_hash: string; explorer_url: string; details: { amount_yocto?: string }; at: string }[];
   } | null;
+  subscriptionSetup: {
+    sku: string; title: string; contractSupports: boolean;
+    product: { price: string; maxExpense: string; active: boolean } | null;
+    plan: { interval_ns: number; min_issues: number; max_issues: number; active: boolean } | null;
+    steps: { label: string; method: string; args: Record<string, unknown> }[];
+  } | null;
+  subscriptions: { id: string; onchain_subscription_id: string; state: string; issues_total: number; issues_started: number; issue_price_units: string; customer_account: string | null; next_due_at: string | null; refund_units: string | null; refund_status: string | null; created_at: string }[];
   pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; chain: "near" | "sepolia"; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string | null; evm_address: string | null } }[];
   treasury: { address: string; eth: string; usdc: string; explorerUrl: string } | null;
   alerts: string[];
@@ -400,6 +407,60 @@ export default function OwnerConsole() {
                   })()
                 )}
               </Card>
+
+              {data.subscriptionSetup && (
+                <Card title="Subscriptions">
+                  {(() => {
+                    const su = data.subscriptionSetup!;
+                    if (!su.contractSupports) return <p className="text-sm text-ink-2">Prepaid subscriptions need the latest contract upgrade.</p>;
+                    return (
+                      <div className="space-y-3 text-sm">
+                        <p className="text-ink-2">
+                          {su.plan?.active
+                            ? <>Customers prepay {su.plan.min_issues} to {su.plan.max_issues} issues of {su.title}; the agent may open one every {Math.round(su.plan.interval_ns / 3.6e12) || 1} hour{Math.round(su.plan.interval_ns / 3.6e12) === 1 ? "" : "s"} and no sooner. Unstarted issues stay in escrow until the customer or you cancel.</>
+                            : <>Not on sale yet. Two owner transactions switch it on.</>}
+                        </p>
+                        {su.steps.map((st) => (
+                          <div key={st.method} className="rounded-md border border-rule p-3">
+                            <p className="text-xs font-medium">{st.label}</p>
+                            {isOwner && (
+                              <button type="button" disabled={!!busy} onClick={() => act(st.label, data.contract.id, st.method, st.args, "30000000000000")} className="press mt-2 h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40">
+                                Sign with wallet
+                              </button>
+                            )}
+                            <CliFallback label={st.label} command={cliCommand(data.contract.id, st.method, st.args, data.contract.owner, "30 Tgas")} busy={!!busy} onSubmit={(h) => recordPasted(st.label, h)} />
+                          </div>
+                        ))}
+                        {data.subscriptions.length > 0 && (
+                          <ul className="divide-y divide-rule border-t border-rule">
+                            {data.subscriptions.map((sub) => (
+                              <li key={sub.id} className="py-2.5">
+                                <div className="flex items-center justify-between gap-2">
+                                  <Link href={`/subscriptions/${sub.id}`} className="font-mono text-xs text-accent">{sub.onchain_subscription_id}</Link>
+                                  <span className="text-xs text-ink-3">{sub.state.toLowerCase()} · {sub.issues_started}/{sub.issues_total} issues</span>
+                                </div>
+                                <div className="mt-0.5 flex items-center justify-between gap-2 text-xs text-ink-3">
+                                  <span className="truncate">{sub.customer_account}</span>
+                                  {sub.state === "ACTIVE" && sub.next_due_at && <span>next {sub.next_due_at.replace("T", " ").slice(5, 16)} UTC</span>}
+                                  {sub.refund_units && <span>refund <Money units={sub.refund_units} /> {sub.refund_status?.toLowerCase()}</span>}
+                                </div>
+                                {sub.state === "ACTIVE" && (
+                                  <CliFallback
+                                    label="Cancel and refund the unstarted issues"
+                                    command={cliCommand(data.contract.id, "cancel_subscription", { subscription_id: sub.onchain_subscription_id }, data.contract.owner)}
+                                    busy={!!busy}
+                                    onSubmit={(h) => recordPasted("Subscription cancelled", h)}
+                                  />
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </Card>
+              )}
 
               <Card title="Agent">
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">

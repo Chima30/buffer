@@ -9,7 +9,7 @@ import { json, tokenMatches } from "@/lib/server/http";
 export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
   const { id } = await ctx.params;
   const token = new URL(req.url).searchParams.get("token");
-  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,created_at,updated_at,failure_reason,products(sku,title)").eq("id", id).single(), "order");
+  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,created_at,updated_at,failure_reason,issue_number,products(sku,title),subscriptions(id,issues_total)").eq("id", id).single(), "order");
   const authorised = tokenMatches(token, order.access_token_hash);
 
   const [transitions, ledger, approval] = await Promise.all([
@@ -39,6 +39,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
     createdAt: order.created_at,
     updatedAt: order.updated_at,
     authorised,
+    subscription: order.subscriptions ? { id: (order.subscriptions as { id: string }).id, issue: order.issue_number, of: (order.subscriptions as { issues_total: number }).issues_total } : null,
     brief: authorised ? order.brief : null,
     plan: authorised ? order.plan : null,
     transitions: transitions.data ?? [],

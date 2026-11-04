@@ -36,6 +36,7 @@ interface OrderRow {
   onchain_order_id: string;
   product_id: string;
   plan: Plan | null;
+  subscription_id: string | null;
 }
 
 type StepResult = { next?: Step; delaySec?: number; repeat?: boolean };
@@ -43,7 +44,7 @@ type StepResult = { next?: Step; delaySec?: number; repeat?: boolean };
 // ---------- helpers ----------
 
 export async function loadOrder(id: string): Promise<OrderRow> {
-  return must(await db().from("orders").select("id,business_id,state,brief,price_units,onchain_order_id,product_id,plan").eq("id", id).single(), "order");
+  return must(await db().from("orders").select("id,business_id,state,brief,price_units,onchain_order_id,product_id,plan,subscription_id").eq("id", id).single(), "order");
 }
 
 export async function transition(order: OrderRow, to: OrderState, reason: string): Promise<void> {
@@ -92,6 +93,11 @@ async function stepPlan(order: OrderRow, ctx: BusinessContext): Promise<StepResu
     idempotencyKey: `${order.id}:plan`,
   });
   const plan = parsePlan(out.content);
+  // Subscription issues are priced for inference only: they never buy a dataset.
+  if (order.subscription_id && plan.use_dataset) {
+    plan.use_dataset = false;
+    plan.dataset_reason = "Subscription issues do not buy datasets.";
+  }
   must(await db().from("orders").update({ plan }).eq("id", order.id).select("id").single(), "save plan");
   if (plan.injection_detected) {
     await audit(order.business_id, "agent", "possible_prompt_injection", order.id, { note: "Planner flagged instructions inside the customer brief; they were ignored." });

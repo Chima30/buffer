@@ -50,6 +50,29 @@ export async function getTreasury(): Promise<OnchainTreasury | null> {
   return viewFunction<OnchainTreasury>(nearConfig().contractId, "get_treasury").catch(() => null);
 }
 
+export interface OnchainSubscription {
+  sku: string;
+  customer: string;
+  issue_price: string;
+  issues_total: number;
+  issues_started: number;
+  interval_ns: number;
+  created_ns: number;
+  next_due_ns: number;
+  escrow: string;
+  state: "Active" | "Completed" | "Cancelled";
+  refund: { recipient: string; amount: string; status: "Pending" | "Confirmed" | "Failed"; attempts: number } | null;
+}
+
+/** Null if the subscription does not exist (or the upgrade is not deployed yet). */
+export async function getSubscription(subscriptionId: string): Promise<OnchainSubscription | null> {
+  return viewFunction<OnchainSubscription | null>(nearConfig().contractId, "get_subscription", { subscription_id: subscriptionId }).catch(() => null);
+}
+
+export async function getSubscriptionPlans(): Promise<[string, { interval_ns: number; min_issues: number; max_issues: number; active: boolean }][] | null> {
+  return viewFunction<[string, { interval_ns: number; min_issues: number; max_issues: number; active: boolean }][]>(nearConfig().contractId, "get_subscription_plans").catch(() => null);
+}
+
 export async function getOrder(orderId: string): Promise<OnchainOrder | null> {
   return viewFunction<OnchainOrder | null>(nearConfig().contractId, "get_order", { order_id: orderId });
 }

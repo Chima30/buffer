@@ -36,6 +36,13 @@
 //! settlement, inside the same expense cap:
 //!   E  = min(V + X + I, product.max_expense, gross),  X = signed EVM purchases
 //!   reimb_owner = E - V
+//!
+//! Subscriptions: a customer prepays N issues of a product at its price in one
+//! payment, held in the subscription's own escrow. When an issue is due (never
+//! earlier than the owner's interval) the agent can only move exactly one
+//! issue's price into a new ordinary order for the same customer, which then
+//! follows every rule above. The customer or owner can cancel at any time; the
+//! unstarted issues are refunded to the customer in full.
 
 pub mod evm;
 
@@ -43,8 +50,8 @@ use near_sdk::json_types::U128;
 use near_sdk::serde::Deserialize;
 use near_sdk::store::{IterableMap, LookupMap};
 use near_sdk::{
-    AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue, env,
-    ext_contract, near, require, serde_json,
+    AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError,
+    PromiseOrValue, env, ext_contract, near, require, serde_json,
 };
 
 pub const BPS_DENOMINATOR: u128 = 10_000;
@@ -93,6 +100,9 @@ enum StorageKey {
     // Appended in the cross-chain upgrade; never reorder.
     EvmVendors,
     EvmPurchases,
+    // Appended in the subscriptions upgrade.
+    SubscriptionPlans,
+    Subscriptions,
 }
 
 #[near(serializers = [json, borsh])]
@@ -197,18 +207,34 @@ pub struct Order {
 impl Order {
     /// Confirmed vendor payments (already left escrow).
     fn vendor_paid(&self) -> u128 {
-        self.purchases.iter().filter(|p| p.status == PurchaseStatus::Paid).map(|p| p.amount.0).sum()
+        self.purchases
+            .iter()
+            .filter(|p| p.status == PurchaseStatus::Paid)
+            .map(|p| p.amount.0)
+            .sum()
     }
     /// Purchases that count against the expense cap: paid, in flight or awaiting approval.
     fn vendor_committed(&self) -> u128 {
         self.purchases
             .iter()
-            .filter(|p| matches!(p.status, PurchaseStatus::Paid | PurchaseStatus::Sending | PurchaseStatus::AwaitingApproval))
+            .filter(|p| {
+                matches!(
+                    p.status,
+                    PurchaseStatus::Paid
+                        | PurchaseStatus::Sending
+                        | PurchaseStatus::AwaitingApproval
+                )
+            })
             .map(|p| p.amount.0)
             .sum()
     }
     fn has_open_purchase(&self) -> bool {
-        self.purchases.iter().any(|p| matches!(p.status, PurchaseStatus::Sending | PurchaseStatus::AwaitingApproval))
+        self.purchases.iter().any(|p| {
+            matches!(
+                p.status,
+                PurchaseStatus::Sending | PurchaseStatus::AwaitingApproval
+            )
+        })
     }
 }
 
@@ -266,10 +292,18 @@ pub struct EvmPurchase {
 
 impl EvmPurchase {
     fn committed(&self) -> bool {
-        matches!(self.status, EvmPurchaseStatus::AwaitingApproval | EvmPurchaseStatus::Signing | EvmPurchaseStatus::Signed)
+        matches!(
+            self.status,
+            EvmPurchaseStatus::AwaitingApproval
+                | EvmPurchaseStatus::Signing
+                | EvmPurchaseStatus::Signed
+        )
     }
     fn open(&self) -> bool {
-        matches!(self.status, EvmPurchaseStatus::AwaitingApproval | EvmPurchaseStatus::Signing)
+        matches!(
+            self.status,
+            EvmPurchaseStatus::AwaitingApproval | EvmPurchaseStatus::Signing
+        )
     }
 }
 
@@ -300,17 +334,41 @@ pub struct Split {
     pub reimb_owner: u128,
 }
 
-pub fn compute_split(gross: u128, max_expense: u128, contributor_bps: u16, vendor_paid: u128, inference_claimed: u128) -> Split {
-    require!(contributor_bps as u128 <= BPS_DENOMINATOR, "contributor_bps out of range");
-    require!(vendor_paid <= max_expense && vendor_paid <= gross, "vendor payments exceed the expense cap");
-    let total = vendor_paid.checked_add(inference_claimed).expect("claim overflow");
+pub fn compute_split(
+    gross: u128,
+    max_expense: u128,
+    contributor_bps: u16,
+    vendor_paid: u128,
+    inference_claimed: u128,
+) -> Split {
+    require!(
+        contributor_bps as u128 <= BPS_DENOMINATOR,
+        "contributor_bps out of range"
+    );
+    require!(
+        vendor_paid <= max_expense && vendor_paid <= gross,
+        "vendor payments exceed the expense cap"
+    );
+    let total = vendor_paid
+        .checked_add(inference_claimed)
+        .expect("claim overflow");
     let expenses = total.min(max_expense).min(gross);
     let distributable = gross - expenses;
     let contributor = distributable * contributor_bps as u128 / BPS_DENOMINATOR;
     let owner = distributable - contributor;
     let reimb_owner = expenses - vendor_paid;
-    require!(vendor_paid + reimb_owner + contributor + owner == gross, "settlement invariant violated");
-    Split { vendor_paid, expenses, distributable, owner, contributor, reimb_owner }
+    require!(
+        vendor_paid + reimb_owner + contributor + owner == gross,
+        "settlement invariant violated"
+    );
+    Split {
+        vendor_paid,
+        expenses,
+        distributable,
+        owner,
+        contributor,
+        reimb_owner,
+    }
 }
 
 /// How much of the owner's share the reserve keeps: a percentage, never past the target.
@@ -324,6 +382,52 @@ pub fn reserve_cut(owner_share: u128, reserve_bps: u16, target: u128, balance: u
 struct PaymentMsg {
     order_id: String,
     sku: String,
+}
+
+#[derive(Deserialize)]
+#[serde(crate = "near_sdk::serde")]
+struct SubscribeMsg {
+    subscription_id: String,
+    sku: String,
+    issues: u32,
+}
+
+/// How a product may be sold as a subscription. Set by the owner.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubscriptionPlan {
+    /// Earliest gap between two issues, in nanoseconds.
+    pub interval_ns: u64,
+    pub min_issues: u32,
+    pub max_issues: u32,
+    pub active: bool,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum SubscriptionState {
+    Active,
+    Completed,
+    Cancelled,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Subscription {
+    pub sku: String,
+    pub customer: AccountId,
+    /// Price of one issue, fixed when the customer paid.
+    pub issue_price: U128,
+    pub issues_total: u32,
+    pub issues_started: u32,
+    pub interval_ns: u64,
+    pub created_ns: u64,
+    pub next_due_ns: u64,
+    /// Prepayment for issues not yet started.
+    pub escrow: U128,
+    pub state: SubscriptionState,
+    /// Refund of the unstarted issues after a cancellation.
+    pub refund: Option<Leg>,
 }
 
 #[derive(Deserialize)]
@@ -354,8 +458,11 @@ pub struct Contract {
     evm_vendors: IterableMap<String, bool>,
     evm_purchases: LookupMap<String, Vec<EvmPurchase>>,
     evm_nonce: u64,
-    // ---- treasury upgrade (appended; see `migrate`) ----
+    // ---- treasury upgrade (appended) ----
     treasury: Treasury,
+    // ---- subscriptions upgrade (appended; see `migrate`) ----
+    subscription_plans: IterableMap<String, SubscriptionPlan>,
+    subscriptions: LookupMap<String, Subscription>,
 }
 
 /// Self-funding treasury state and the owner's rules for it.
@@ -378,9 +485,9 @@ pub struct Treasury {
     pub gas_spent_week: U128,
 }
 
-/// State layout before the treasury upgrade, read once by `migrate`.
+/// State layout before the subscriptions upgrade, read once by `migrate`.
 #[near(serializers = [borsh])]
-struct ContractV2 {
+pub(crate) struct ContractV3 {
     owner: AccountId,
     agent: AccountId,
     token_id: AccountId,
@@ -399,6 +506,7 @@ struct ContractV2 {
     evm_vendors: IterableMap<String, bool>,
     evm_purchases: LookupMap<String, Vec<EvmPurchase>>,
     evm_nonce: u64,
+    treasury: Treasury,
 }
 
 fn emit(event: &str, data: serde_json::Value) {
@@ -409,7 +517,11 @@ fn emit(event: &str, data: serde_json::Value) {
 }
 
 fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.len() <= MAX_ID_LEN && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    !id.is_empty()
+        && id.len() <= MAX_ID_LEN
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[near]
@@ -446,18 +558,20 @@ impl Contract {
             evm_purchases: LookupMap::new(StorageKey::EvmPurchases),
             evm_nonce: 0,
             treasury: Treasury::default(),
+            subscription_plans: IterableMap::new(StorageKey::SubscriptionPlans),
+            subscriptions: LookupMap::new(StorageKey::Subscriptions),
         };
         c.assert_config_valid();
         c
     }
 
-    /// One-time upgrade from the cross-chain layout. Keeps every existing field,
-    /// order, purchase and settlement; adds an empty treasury with no rules set.
+    /// One-time upgrade from the treasury layout. Keeps every existing field,
+    /// order, purchase, settlement and the treasury; adds empty subscriptions.
     #[private]
     #[init(ignore_state)]
     pub fn migrate() -> Self {
-        let old: ContractV2 = env::state_read().expect("no prior state");
-        emit("migrated", serde_json::json!({ "to": "treasury" }));
+        let old: ContractV3 = env::state_read().expect("no prior state");
+        emit("migrated", serde_json::json!({ "to": "subscriptions" }));
         Self {
             owner: old.owner,
             agent: old.agent,
@@ -477,21 +591,31 @@ impl Contract {
             evm_vendors: old.evm_vendors,
             evm_purchases: old.evm_purchases,
             evm_nonce: old.evm_nonce,
-            treasury: Treasury::default(),
+            treasury: old.treasury,
+            subscription_plans: IterableMap::new(StorageKey::SubscriptionPlans),
+            subscriptions: LookupMap::new(StorageKey::Subscriptions),
         }
     }
 
     // ---------- owner-only configuration ----------
 
-    pub fn set_recipients(&mut self, owner_payout: AccountId, contributor: AccountId, contributor_bps: u16) {
+    pub fn set_recipients(
+        &mut self,
+        owner_payout: AccountId,
+        contributor: AccountId,
+        contributor_bps: u16,
+    ) {
         self.assert_owner();
         self.owner_payout = owner_payout;
         self.contributor = contributor;
         self.contributor_bps = contributor_bps;
         self.assert_config_valid();
-        emit("config_updated", serde_json::json!({
-            "owner_payout": self.owner_payout, "contributor": self.contributor, "contributor_bps": self.contributor_bps,
-        }));
+        emit(
+            "config_updated",
+            serde_json::json!({
+                "owner_payout": self.owner_payout, "contributor": self.contributor, "contributor_bps": self.contributor_bps,
+            }),
+        );
     }
 
     pub fn set_agent(&mut self, agent: AccountId) {
@@ -504,14 +628,20 @@ impl Contract {
     pub fn set_purchase_approval_above(&mut self, amount: U128) {
         self.assert_owner();
         self.purchase_approval_above = amount;
-        emit("approval_threshold_set", serde_json::json!({ "above": amount }));
+        emit(
+            "approval_threshold_set",
+            serde_json::json!({ "above": amount }),
+        );
     }
 
     pub fn set_vendor(&mut self, vendor: AccountId, approved: bool) {
         self.assert_owner();
         require!(vendor != self.agent, "agent cannot be a vendor");
         self.vendors.insert(vendor.clone(), approved);
-        emit("vendor_set", serde_json::json!({ "vendor": vendor, "approved": approved }));
+        emit(
+            "vendor_set",
+            serde_json::json!({ "vendor": vendor, "approved": approved }),
+        );
     }
 
     pub fn set_product(&mut self, sku: String, price: U128, max_expense: U128, active: bool) {
@@ -519,15 +649,63 @@ impl Contract {
         require!(valid_id(&sku), "invalid sku");
         require!(price.0 > 0, "price must be positive");
         require!(max_expense.0 <= price.0, "max_expense cannot exceed price");
-        self.products.insert(sku.clone(), Product { price, max_expense, active });
-        emit("product_set", serde_json::json!({ "sku": sku, "price": price, "max_expense": max_expense, "active": active }));
+        self.products.insert(
+            sku.clone(),
+            Product {
+                price,
+                max_expense,
+                active,
+            },
+        );
+        emit(
+            "product_set",
+            serde_json::json!({ "sku": sku, "price": price, "max_expense": max_expense, "active": active }),
+        );
     }
 
     /// Anchors the sha256 of the owner-approved policy document.
+    /// Lets customers prepay `min_issues..=max_issues` issues of an existing product,
+    /// at most one issue per `interval_ns`. `active: false` stops new subscriptions only.
+    pub fn set_subscription_plan(
+        &mut self,
+        sku: String,
+        interval_ns: u64,
+        min_issues: u32,
+        max_issues: u32,
+        active: bool,
+    ) {
+        self.assert_owner();
+        require!(self.products.contains_key(&sku), "unknown product");
+        require!(interval_ns > 0, "interval must be positive");
+        require!(
+            min_issues >= 1 && min_issues <= max_issues && max_issues <= 52,
+            "issues out of range"
+        );
+        self.subscription_plans.insert(
+            sku.clone(),
+            SubscriptionPlan {
+                interval_ns,
+                min_issues,
+                max_issues,
+                active,
+            },
+        );
+        emit(
+            "subscription_plan_set",
+            serde_json::json!({ "sku": sku, "interval_ns": interval_ns, "min_issues": min_issues, "max_issues": max_issues, "active": active }),
+        );
+    }
+
     pub fn set_evm_config(&mut self, config: EvmConfig) {
         self.assert_owner();
-        require!(evm::parse_address(&config.usdc).is_some(), "usdc must be a 0x address");
-        require!(config.gas_limit >= 21_000 && config.gas_limit <= 500_000, "gas_limit out of range");
+        require!(
+            evm::parse_address(&config.usdc).is_some(),
+            "usdc must be a 0x address"
+        );
+        require!(
+            config.gas_limit >= 21_000 && config.gas_limit <= 500_000,
+            "gas_limit out of range"
+        );
         require!(config.max_fee_per_gas_cap.0 > 0, "fee cap must be positive");
         let mut config = config;
         config.usdc = config.usdc.to_lowercase();
@@ -540,7 +718,10 @@ impl Contract {
         let a = evm::parse_address(&vendor).expect("vendor must be a 0x address");
         let key = evm::address_string(&a);
         self.evm_vendors.insert(key.clone(), approved);
-        emit("evm_vendor_set", serde_json::json!({ "vendor": key, "approved": approved }));
+        emit(
+            "evm_vendor_set",
+            serde_json::json!({ "vendor": key, "approved": approved }),
+        );
     }
 
     /// Resync the treasury nonce, e.g. after a signed transaction was never mined.
@@ -552,16 +733,31 @@ impl Contract {
 
     // ---------- treasury (owner rules, agent triggers) ----------
 
-    pub fn set_treasury_rules(&mut self, reserve_bps: u16, reserve_target: U128, gas_refill_amount: U128, gas_week_cap: U128) {
+    pub fn set_treasury_rules(
+        &mut self,
+        reserve_bps: u16,
+        reserve_target: U128,
+        gas_refill_amount: U128,
+        gas_week_cap: U128,
+    ) {
         self.assert_owner();
-        require!(reserve_bps as u128 <= BPS_DENOMINATOR, "reserve_bps out of range");
-        require!(gas_refill_amount.0 <= gas_week_cap.0, "one refill cannot exceed the weekly cap");
+        require!(
+            reserve_bps as u128 <= BPS_DENOMINATOR,
+            "reserve_bps out of range"
+        );
+        require!(
+            gas_refill_amount.0 <= gas_week_cap.0,
+            "one refill cannot exceed the weekly cap"
+        );
         let t = &mut self.treasury;
         t.reserve_bps = reserve_bps;
         t.reserve_target = reserve_target;
         t.gas_refill_amount = gas_refill_amount;
         t.gas_week_cap = gas_week_cap;
-        emit("treasury_rules_set", serde_json::json!({ "reserve_bps": reserve_bps, "reserve_target": reserve_target, "gas_refill_amount": gas_refill_amount, "gas_week_cap": gas_week_cap }));
+        emit(
+            "treasury_rules_set",
+            serde_json::json!({ "reserve_bps": reserve_bps, "reserve_target": reserve_target, "gas_refill_amount": gas_refill_amount, "gas_week_cap": gas_week_cap }),
+        );
     }
 
     /// Owner deposits NEAR the agent's gas refills are paid from.
@@ -571,7 +767,10 @@ impl Contract {
         let amount = env::attached_deposit().as_yoctonear();
         require!(amount > 0, "attach NEAR to fund the gas reserve");
         self.treasury.gas_reserve = U128(self.treasury.gas_reserve.0 + amount);
-        emit("gas_reserve_funded", serde_json::json!({ "amount": U128(amount), "gas_reserve": self.treasury.gas_reserve }));
+        emit(
+            "gas_reserve_funded",
+            serde_json::json!({ "amount": U128(amount), "gas_reserve": self.treasury.gas_reserve }),
+        );
     }
 
     /// Agent asks for one gas refill. The contract enforces the size and the weekly cap.
@@ -587,62 +786,113 @@ impl Contract {
             t.gas_week_start_ns = now;
             t.gas_spent_week = U128(0);
         }
-        require!(t.gas_spent_week.0 + amount <= t.gas_week_cap.0, "weekly gas refill cap reached");
+        require!(
+            t.gas_spent_week.0 + amount <= t.gas_week_cap.0,
+            "weekly gas refill cap reached"
+        );
         t.gas_spent_week = U128(t.gas_spent_week.0 + amount);
         t.gas_reserve = U128(t.gas_reserve.0 - amount);
-        emit("gas_refilled", serde_json::json!({ "to": self.agent, "amount": U128(amount), "gas_reserve": t.gas_reserve, "spent_this_week": t.gas_spent_week }));
+        emit(
+            "gas_refilled",
+            serde_json::json!({ "to": self.agent, "amount": U128(amount), "gas_reserve": t.gas_reserve, "spent_this_week": t.gas_spent_week }),
+        );
         Promise::new(self.agent.clone()).transfer(NearToken::from_yoctonear(amount))
     }
 
     pub fn withdraw_gas_reserve(&mut self, amount: U128) -> Promise {
         self.assert_owner();
-        require!(amount.0 > 0 && amount.0 <= self.treasury.gas_reserve.0, "amount exceeds the gas reserve");
+        require!(
+            amount.0 > 0 && amount.0 <= self.treasury.gas_reserve.0,
+            "amount exceeds the gas reserve"
+        );
         self.treasury.gas_reserve = U128(self.treasury.gas_reserve.0 - amount.0);
-        emit("gas_reserve_withdrawn", serde_json::json!({ "amount": amount, "to": self.owner }));
+        emit(
+            "gas_reserve_withdrawn",
+            serde_json::json!({ "amount": amount, "to": self.owner }),
+        );
         Promise::new(self.owner.clone()).transfer(NearToken::from_yoctonear(amount.0))
     }
 
     /// Owner takes USDC out of the business reserve. Restored if the transfer fails.
     pub fn withdraw_reserve(&mut self, amount: U128) -> Promise {
         self.assert_owner();
-        require!(amount.0 > 0 && amount.0 <= self.treasury.reserve_balance.0, "amount exceeds the reserve");
+        require!(
+            amount.0 > 0 && amount.0 <= self.treasury.reserve_balance.0,
+            "amount exceeds the reserve"
+        );
         self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 - amount.0);
         ext_ft::ext(self.token_id.clone())
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(FT_TRANSFER_GAS)
-            .ft_transfer(self.owner_payout.clone(), amount, Some("buffer:reserve-withdrawal".into()))
-            .then(Self::ext(env::current_account_id()).with_static_gas(CALLBACK_GAS).on_reserve_withdrawn(amount))
+            .ft_transfer(
+                self.owner_payout.clone(),
+                amount,
+                Some("buffer:reserve-withdrawal".into()),
+            )
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(CALLBACK_GAS)
+                    .on_reserve_withdrawn(amount),
+            )
     }
 
     #[private]
-    pub fn on_reserve_withdrawn(&mut self, amount: U128, #[callback_result] result: Result<(), PromiseError>) {
+    pub fn on_reserve_withdrawn(
+        &mut self,
+        amount: U128,
+        #[callback_result] result: Result<(), PromiseError>,
+    ) {
         if result.is_ok() {
-            emit("reserve_withdrawn", serde_json::json!({ "amount": amount, "to": self.owner_payout }));
+            emit(
+                "reserve_withdrawn",
+                serde_json::json!({ "amount": amount, "to": self.owner_payout }),
+            );
         } else {
             self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 + amount.0);
-            emit("reserve_withdrawal_failed", serde_json::json!({ "amount": amount }));
+            emit(
+                "reserve_withdrawal_failed",
+                serde_json::json!({ "amount": amount }),
+            );
         }
     }
 
     pub fn set_policy_hash(&mut self, version: u32, hash: String) {
         self.assert_owner();
-        require!(version > self.policy_version, "policy version must increase");
-        require!(hash.len() == 64 && hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()), "hash must be 64 lowercase hex chars");
+        require!(
+            version > self.policy_version,
+            "policy version must increase"
+        );
+        require!(
+            hash.len() == 64
+                && hash
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
+            "hash must be 64 lowercase hex chars"
+        );
         self.policy_version = version;
         self.policy_hash = Some(hash.clone());
-        emit("policy_anchored", serde_json::json!({ "version": version, "hash": hash }));
+        emit(
+            "policy_anchored",
+            serde_json::json!({ "version": version, "hash": hash }),
+        );
     }
 
     pub fn pause(&mut self) {
         self.assert_owner();
         self.paused = true;
-        emit("paused", serde_json::json!({ "by": env::predecessor_account_id() }));
+        emit(
+            "paused",
+            serde_json::json!({ "by": env::predecessor_account_id() }),
+        );
     }
 
     pub fn unpause(&mut self) {
         self.assert_owner();
         self.paused = false;
-        emit("unpaused", serde_json::json!({ "by": env::predecessor_account_id() }));
+        emit(
+            "unpaused",
+            serde_json::json!({ "by": env::predecessor_account_id() }),
+        );
     }
 
     // ---------- payments (NEP-141 receiver) ----------
@@ -650,12 +900,20 @@ impl Contract {
     /// Customer payment: exactly the product price for a new order id.
     /// Owner top-up: `{"refund_top_up":"<order_id>"}` adds to an order's refund pool.
     /// Anything else is returned to the sender in full.
-    pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> PromiseOrValue<U128> {
+    pub fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
         if env::predecessor_account_id() != self.token_id {
             env::panic_str("only the configured token can pay");
         }
         let reject = |reason: &str| {
-            emit("payment_rejected", serde_json::json!({ "sender": sender_id, "amount": amount, "reason": reason }));
+            emit(
+                "payment_rejected",
+                serde_json::json!({ "sender": sender_id, "amount": amount, "reason": reason }),
+            );
             PromiseOrValue::Value(amount)
         };
 
@@ -664,10 +922,15 @@ impl Contract {
                 return reject("top_up_not_owner");
             }
             return match self.orders.get(&top.refund_top_up).cloned() {
-                Some(mut order) if matches!(order.state, OrderState::Paid | OrderState::Fulfilled) => {
+                Some(mut order)
+                    if matches!(order.state, OrderState::Paid | OrderState::Fulfilled) =>
+                {
                     order.refund_top_up = U128(order.refund_top_up.0 + amount.0);
                     self.orders.insert(top.refund_top_up.clone(), order);
-                    emit("refund_topped_up", serde_json::json!({ "order_id": top.refund_top_up, "amount": amount }));
+                    emit(
+                        "refund_topped_up",
+                        serde_json::json!({ "order_id": top.refund_top_up, "amount": amount }),
+                    );
                     PromiseOrValue::Value(U128(0))
                 }
                 _ => reject("top_up_bad_order"),
@@ -676,6 +939,12 @@ impl Contract {
 
         if self.paused {
             return reject("paused");
+        }
+        if let Ok(sub) = serde_json::from_str::<SubscribeMsg>(&msg) {
+            return match self.subscribe(&sender_id, amount, sub) {
+                Ok(()) => PromiseOrValue::Value(U128(0)),
+                Err(reason) => reject(reason),
+            };
         }
         let parsed: PaymentMsg = match serde_json::from_str(&msg) {
             Ok(p) => p,
@@ -712,7 +981,10 @@ impl Contract {
                 legs: vec![],
             },
         );
-        emit("payment_received", serde_json::json!({ "order_id": parsed.order_id, "sku": parsed.sku, "customer": sender_id, "amount": amount }));
+        emit(
+            "payment_received",
+            serde_json::json!({ "order_id": parsed.order_id, "sku": parsed.sku, "customer": sender_id, "amount": amount }),
+        );
         PromiseOrValue::Value(U128(0))
     }
 
@@ -722,26 +994,58 @@ impl Contract {
     /// At or below the approval threshold it pays immediately; above it, the
     /// purchase waits for the owner to approve exactly this vendor and amount.
     /// Returns the purchase index.
-    pub fn request_purchase(&mut self, order_id: String, vendor: AccountId, amount: U128, memo: String) -> PromiseOrValue<u32> {
+    pub fn request_purchase(
+        &mut self,
+        order_id: String,
+        vendor: AccountId,
+        amount: U128,
+        memo: String,
+    ) -> PromiseOrValue<u32> {
         self.assert_agent();
         require!(!self.paused, "paused");
         require!(amount.0 > 0, "amount must be positive");
         require!(memo.len() <= MAX_REF_LEN, "memo too long");
-        require!(self.vendors.get(&vendor).copied().unwrap_or(false), "vendor is not approved");
+        require!(
+            self.vendors.get(&vendor).copied().unwrap_or(false),
+            "vendor is not approved"
+        );
         let mut order = self.order_or_panic(&order_id);
-        require!(order.state == OrderState::Paid, "order is not in Paid state");
+        require!(
+            order.state == OrderState::Paid,
+            "order is not in Paid state"
+        );
         require!(order.purchases.len() < MAX_PURCHASES, "too many purchases");
-        let product = self.products.get(&order.sku).expect("product missing").clone();
-        require!(self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0, "purchase exceeds the order's expense cap");
+        let product = self
+            .products
+            .get(&order.sku)
+            .expect("product missing")
+            .clone();
+        require!(
+            self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0,
+            "purchase exceeds the order's expense cap"
+        );
 
         let needs_approval = amount.0 > self.purchase_approval_above.0;
-        let status = if needs_approval { PurchaseStatus::AwaitingApproval } else { PurchaseStatus::Sending };
-        order.purchases.push(Purchase { vendor: vendor.clone(), amount, memo: memo.clone(), status });
+        let status = if needs_approval {
+            PurchaseStatus::AwaitingApproval
+        } else {
+            PurchaseStatus::Sending
+        };
+        order.purchases.push(Purchase {
+            vendor: vendor.clone(),
+            amount,
+            memo: memo.clone(),
+            status,
+        });
         let index = (order.purchases.len() - 1) as u32;
         self.orders.insert(order_id.clone(), order);
 
         emit(
-            if needs_approval { "purchase_awaiting_approval" } else { "purchase_requested" },
+            if needs_approval {
+                "purchase_awaiting_approval"
+            } else {
+                "purchase_requested"
+            },
             serde_json::json!({ "order_id": order_id, "index": index, "vendor": vendor, "amount": amount, "memo": memo }),
         );
         if needs_approval {
@@ -756,59 +1060,139 @@ impl Contract {
         self.assert_owner();
         require!(!self.paused, "paused");
         let mut order = self.order_or_panic(&order_id);
-        require!(order.state == OrderState::Paid, "order is not in Paid state");
-        let p = order.purchases.get_mut(index as usize).expect("no such purchase");
-        require!(p.status == PurchaseStatus::AwaitingApproval, "purchase is not awaiting approval");
-        require!(self.vendors.get(&p.vendor).copied().unwrap_or(false), "vendor is no longer approved");
+        require!(
+            order.state == OrderState::Paid,
+            "order is not in Paid state"
+        );
+        let p = order
+            .purchases
+            .get_mut(index as usize)
+            .expect("no such purchase");
+        require!(
+            p.status == PurchaseStatus::AwaitingApproval,
+            "purchase is not awaiting approval"
+        );
+        require!(
+            self.vendors.get(&p.vendor).copied().unwrap_or(false),
+            "vendor is no longer approved"
+        );
         p.status = PurchaseStatus::Sending;
         let (vendor, amount) = (p.vendor.clone(), p.amount);
         self.orders.insert(order_id.clone(), order);
-        emit("purchase_approved", serde_json::json!({ "order_id": order_id, "index": index, "by": env::predecessor_account_id() }));
+        emit(
+            "purchase_approved",
+            serde_json::json!({ "order_id": order_id, "index": index, "by": env::predecessor_account_id() }),
+        );
         self.send_purchase(&order_id, index, &vendor, amount)
     }
 
     pub fn reject_purchase(&mut self, order_id: String, index: u32) {
         self.assert_owner();
         let mut order = self.order_or_panic(&order_id);
-        let p = order.purchases.get_mut(index as usize).expect("no such purchase");
-        require!(p.status == PurchaseStatus::AwaitingApproval, "purchase is not awaiting approval");
+        let p = order
+            .purchases
+            .get_mut(index as usize)
+            .expect("no such purchase");
+        require!(
+            p.status == PurchaseStatus::AwaitingApproval,
+            "purchase is not awaiting approval"
+        );
         p.status = PurchaseStatus::Rejected;
         self.orders.insert(order_id.clone(), order);
-        emit("purchase_rejected", serde_json::json!({ "order_id": order_id, "index": index }));
+        emit(
+            "purchase_rejected",
+            serde_json::json!({ "order_id": order_id, "index": index }),
+        );
     }
 
     #[private]
-    pub fn on_purchase_resolved(&mut self, order_id: String, index: u32, #[callback_result] result: Result<(), PromiseError>) {
+    pub fn on_purchase_resolved(
+        &mut self,
+        order_id: String,
+        index: u32,
+        #[callback_result] result: Result<(), PromiseError>,
+    ) {
         let mut order = self.order_or_panic(&order_id);
         let ok = result.is_ok();
-        let p = order.purchases.get_mut(index as usize).expect("no such purchase");
-        p.status = if ok { PurchaseStatus::Paid } else { PurchaseStatus::Failed };
+        let p = order
+            .purchases
+            .get_mut(index as usize)
+            .expect("no such purchase");
+        p.status = if ok {
+            PurchaseStatus::Paid
+        } else {
+            PurchaseStatus::Failed
+        };
         let (vendor, amount) = (p.vendor.clone(), p.amount);
         self.orders.insert(order_id.clone(), order);
-        emit(if ok { "purchase_paid" } else { "purchase_failed" }, serde_json::json!({
-            "order_id": order_id, "index": index, "vendor": vendor, "amount": amount,
-        }));
+        emit(
+            if ok {
+                "purchase_paid"
+            } else {
+                "purchase_failed"
+            },
+            serde_json::json!({
+                "order_id": order_id, "index": index, "vendor": vendor, "amount": amount,
+            }),
+        );
     }
 
     // ---------- cross-chain purchases (Chain Signatures) ----------
 
     /// Agent asks to pay an approved EVM vendor in USDC from the treasury.
     /// The contract builds the transaction; the agent only offers gas fees under the owner's cap.
-    pub fn request_evm_purchase(&mut self, order_id: String, vendor: String, amount: U128, max_fee_per_gas: U128, max_priority_fee_per_gas: U128) -> PromiseOrValue<u32> {
+    pub fn request_evm_purchase(
+        &mut self,
+        order_id: String,
+        vendor: String,
+        amount: U128,
+        max_fee_per_gas: U128,
+        max_priority_fee_per_gas: U128,
+    ) -> PromiseOrValue<u32> {
         self.assert_agent();
         require!(!self.paused, "paused");
-        let cfg = self.evm.clone().expect("cross-chain purchases are not configured");
+        let cfg = self
+            .evm
+            .clone()
+            .expect("cross-chain purchases are not configured");
         require!(amount.0 > 0, "amount must be positive");
-        let vendor = evm::address_string(&evm::parse_address(&vendor).expect("vendor must be a 0x address"));
-        require!(self.evm_vendors.get(&vendor).copied().unwrap_or(false), "evm vendor is not approved");
-        require!(max_fee_per_gas.0 > 0 && max_fee_per_gas.0 <= cfg.max_fee_per_gas_cap.0, "max_fee_per_gas above the owner's cap");
-        require!(max_priority_fee_per_gas.0 <= max_fee_per_gas.0, "priority fee above max fee");
+        let vendor =
+            evm::address_string(&evm::parse_address(&vendor).expect("vendor must be a 0x address"));
+        require!(
+            self.evm_vendors.get(&vendor).copied().unwrap_or(false),
+            "evm vendor is not approved"
+        );
+        require!(
+            max_fee_per_gas.0 > 0 && max_fee_per_gas.0 <= cfg.max_fee_per_gas_cap.0,
+            "max_fee_per_gas above the owner's cap"
+        );
+        require!(
+            max_priority_fee_per_gas.0 <= max_fee_per_gas.0,
+            "priority fee above max fee"
+        );
         let order = self.order_or_panic(&order_id);
-        require!(order.state == OrderState::Paid, "order is not in Paid state");
-        let mut list = self.evm_purchases.get(&order_id).cloned().unwrap_or_default();
-        require!(order.purchases.len() + list.len() < MAX_PURCHASES, "too many purchases");
-        let product = self.products.get(&order.sku).expect("product missing").clone();
-        require!(self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0, "purchase exceeds the order's expense cap");
+        require!(
+            order.state == OrderState::Paid,
+            "order is not in Paid state"
+        );
+        let mut list = self
+            .evm_purchases
+            .get(&order_id)
+            .cloned()
+            .unwrap_or_default();
+        require!(
+            order.purchases.len() + list.len() < MAX_PURCHASES,
+            "too many purchases"
+        );
+        let product = self
+            .products
+            .get(&order.sku)
+            .expect("product missing")
+            .clone();
+        require!(
+            self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0,
+            "purchase exceeds the order's expense cap"
+        );
 
         let needs_approval = amount.0 > self.purchase_approval_above.0;
         list.push(EvmPurchase {
@@ -821,13 +1205,21 @@ impl Contract {
             max_priority_fee_per_gas,
             nonce: None,
             payload_hash: None,
-            status: if needs_approval { EvmPurchaseStatus::AwaitingApproval } else { EvmPurchaseStatus::Signing },
+            status: if needs_approval {
+                EvmPurchaseStatus::AwaitingApproval
+            } else {
+                EvmPurchaseStatus::Signing
+            },
             signature: None,
         });
         let index = (list.len() - 1) as u32;
         self.evm_purchases.insert(order_id.clone(), list);
         emit(
-            if needs_approval { "evm_purchase_awaiting_approval" } else { "evm_purchase_requested" },
+            if needs_approval {
+                "evm_purchase_awaiting_approval"
+            } else {
+                "evm_purchase_requested"
+            },
             serde_json::json!({ "order_id": order_id, "index": index, "vendor": vendor, "amount": amount, "chain_id": cfg.chain_id }),
         );
         if needs_approval {
@@ -840,46 +1232,92 @@ impl Contract {
     pub fn approve_evm_purchase(&mut self, order_id: String, index: u32) -> Promise {
         self.assert_owner();
         require!(!self.paused, "paused");
-        let cfg = self.evm.clone().expect("cross-chain purchases are not configured");
+        let cfg = self
+            .evm
+            .clone()
+            .expect("cross-chain purchases are not configured");
         let order = self.order_or_panic(&order_id);
-        require!(order.state == OrderState::Paid, "order is not in Paid state");
-        let mut list = self.evm_purchases.get(&order_id).cloned().expect("no evm purchases");
+        require!(
+            order.state == OrderState::Paid,
+            "order is not in Paid state"
+        );
+        let mut list = self
+            .evm_purchases
+            .get(&order_id)
+            .cloned()
+            .expect("no evm purchases");
         let p = list.get_mut(index as usize).expect("no such evm purchase");
-        require!(p.status == EvmPurchaseStatus::AwaitingApproval, "evm purchase is not awaiting approval");
-        require!(self.evm_vendors.get(&p.vendor).copied().unwrap_or(false), "evm vendor is no longer approved");
+        require!(
+            p.status == EvmPurchaseStatus::AwaitingApproval,
+            "evm purchase is not awaiting approval"
+        );
+        require!(
+            self.evm_vendors.get(&p.vendor).copied().unwrap_or(false),
+            "evm vendor is no longer approved"
+        );
         p.status = EvmPurchaseStatus::Signing;
         self.evm_purchases.insert(order_id.clone(), list);
-        emit("evm_purchase_approved", serde_json::json!({ "order_id": order_id, "index": index, "by": env::predecessor_account_id() }));
+        emit(
+            "evm_purchase_approved",
+            serde_json::json!({ "order_id": order_id, "index": index, "by": env::predecessor_account_id() }),
+        );
         self.start_signing(&order_id, index, &cfg)
     }
 
     pub fn reject_evm_purchase(&mut self, order_id: String, index: u32) {
         self.assert_owner();
-        let mut list = self.evm_purchases.get(&order_id).cloned().expect("no evm purchases");
+        let mut list = self
+            .evm_purchases
+            .get(&order_id)
+            .cloned()
+            .expect("no evm purchases");
         let p = list.get_mut(index as usize).expect("no such evm purchase");
-        require!(p.status == EvmPurchaseStatus::AwaitingApproval, "evm purchase is not awaiting approval");
+        require!(
+            p.status == EvmPurchaseStatus::AwaitingApproval,
+            "evm purchase is not awaiting approval"
+        );
         p.status = EvmPurchaseStatus::Rejected;
         self.evm_purchases.insert(order_id.clone(), list);
-        emit("evm_purchase_rejected", serde_json::json!({ "order_id": order_id, "index": index }));
+        emit(
+            "evm_purchase_rejected",
+            serde_json::json!({ "order_id": order_id, "index": index }),
+        );
     }
 
     #[private]
-    pub fn on_evm_signed(&mut self, order_id: String, index: u32, #[callback_result] result: Result<serde_json::Value, PromiseError>) {
-        let mut list = self.evm_purchases.get(&order_id).cloned().expect("no evm purchases");
+    pub fn on_evm_signed(
+        &mut self,
+        order_id: String,
+        index: u32,
+        #[callback_result] result: Result<serde_json::Value, PromiseError>,
+    ) {
+        let mut list = self
+            .evm_purchases
+            .get(&order_id)
+            .cloned()
+            .expect("no evm purchases");
         let p = list.get_mut(index as usize).expect("no such evm purchase");
         let sig = result.ok().and_then(|v| {
             let big_r = v.get("big_r")?.get("affine_point")?.as_str()?.to_string();
             let s = v.get("s")?.get("scalar")?.as_str()?.to_string();
             let recovery_id = u8::try_from(v.get("recovery_id")?.as_u64()?).ok()?;
-            Some(EvmSignature { big_r, s, recovery_id })
+            Some(EvmSignature {
+                big_r,
+                s,
+                recovery_id,
+            })
         });
         match sig {
             Some(sig) => {
                 p.status = EvmPurchaseStatus::Signed;
                 p.signature = Some(sig.clone());
-                let (vendor, amount, nonce, hash) = (p.vendor.clone(), p.amount, p.nonce, p.payload_hash.clone());
+                let (vendor, amount, nonce, hash) =
+                    (p.vendor.clone(), p.amount, p.nonce, p.payload_hash.clone());
                 self.evm_purchases.insert(order_id.clone(), list);
-                emit("evm_purchase_signed", serde_json::json!({ "order_id": order_id, "index": index, "vendor": vendor, "amount": amount, "nonce": nonce, "payload_hash": hash, "signature": sig }));
+                emit(
+                    "evm_purchase_signed",
+                    serde_json::json!({ "order_id": order_id, "index": index, "vendor": vendor, "amount": amount, "nonce": nonce, "payload_hash": hash, "signature": sig }),
+                );
             }
             None => {
                 p.status = EvmPurchaseStatus::Failed;
@@ -888,7 +1326,10 @@ impl Contract {
                     self.evm_nonce -= 1;
                 }
                 self.evm_purchases.insert(order_id.clone(), list);
-                emit("evm_purchase_sign_failed", serde_json::json!({ "order_id": order_id, "index": index }));
+                emit(
+                    "evm_purchase_sign_failed",
+                    serde_json::json!({ "order_id": order_id, "index": index }),
+                );
             }
         }
     }
@@ -898,15 +1339,31 @@ impl Contract {
     pub fn mark_fulfilled(&mut self, order_id: String, report_hash: String) {
         self.assert_agent();
         require!(!self.paused, "paused");
-        require!(report_hash.len() == 64 && report_hash.chars().all(|c| c.is_ascii_hexdigit()), "bad report hash");
+        require!(
+            report_hash.len() == 64 && report_hash.chars().all(|c| c.is_ascii_hexdigit()),
+            "bad report hash"
+        );
         let mut order = self.order_or_panic(&order_id);
-        require!(order.state == OrderState::Paid, "order is not in Paid state");
+        require!(
+            order.state == OrderState::Paid,
+            "order is not in Paid state"
+        );
         require!(!order.has_open_purchase(), "a purchase is still open");
-        require!(!self.evm_purchases.get(&order_id).map(|l| l.iter().any(|p| p.open())).unwrap_or(false), "a cross-chain purchase is still open");
+        require!(
+            !self
+                .evm_purchases
+                .get(&order_id)
+                .map(|l| l.iter().any(|p| p.open()))
+                .unwrap_or(false),
+            "a cross-chain purchase is still open"
+        );
         order.state = OrderState::Fulfilled;
         order.report_hash = Some(report_hash.clone());
         self.orders.insert(order_id.clone(), order);
-        emit("order_fulfilled", serde_json::json!({ "order_id": order_id, "report_hash": report_hash }));
+        emit(
+            "order_fulfilled",
+            serde_json::json!({ "order_id": order_id, "report_hash": report_hash }),
+        );
     }
 
     /// Settles a fulfilled order exactly once. `claims` may contain only
@@ -920,25 +1377,64 @@ impl Contract {
         require!(!self.paused, "paused");
         require!(claims.len() <= MAX_CLAIMS, "too many claims");
         for c in &claims {
-            require!(c.category == ExpenseCategory::Inference, "only inference claims; vendor costs are on-chain");
-            require!(!c.evidence_ref.is_empty() && c.evidence_ref.len() <= MAX_REF_LEN, "each claim needs evidence");
+            require!(
+                c.category == ExpenseCategory::Inference,
+                "only inference claims; vendor costs are on-chain"
+            );
+            require!(
+                !c.evidence_ref.is_empty() && c.evidence_ref.len() <= MAX_REF_LEN,
+                "each claim needs evidence"
+            );
         }
         let mut order = self.order_or_panic(&order_id);
-        require!(order.state == OrderState::Fulfilled, "order is not in Fulfilled state");
-        let product = self.products.get(&order.sku).expect("product missing").clone();
-        let inference: u128 = claims.iter().map(|c| c.amount.0).fold(0u128, |a, b| a.checked_add(b).expect("claim overflow"));
+        require!(
+            order.state == OrderState::Fulfilled,
+            "order is not in Fulfilled state"
+        );
+        let product = self
+            .products
+            .get(&order.sku)
+            .expect("product missing")
+            .clone();
+        let inference: u128 = claims
+            .iter()
+            .map(|c| c.amount.0)
+            .fold(0u128, |a, b| a.checked_add(b).expect("claim overflow"));
         // Signed cross-chain purchases were paid from the owner-funded treasury: reimbursed like inference.
         let evm_paid = self.evm_signed_total(&order_id);
         let reimbursable = inference.checked_add(evm_paid).expect("claim overflow");
-        let split = compute_split(order.gross.0, product.max_expense.0, self.contributor_bps, order.vendor_paid(), reimbursable);
+        let split = compute_split(
+            order.gross.0,
+            product.max_expense.0,
+            self.contributor_bps,
+            order.vendor_paid(),
+            reimbursable,
+        );
 
         // Business reserve comes out of the owner's share only.
-        let reserve = reserve_cut(split.owner, self.treasury.reserve_bps, self.treasury.reserve_target.0, self.treasury.reserve_balance.0);
+        let reserve = reserve_cut(
+            split.owner,
+            self.treasury.reserve_bps,
+            self.treasury.reserve_target.0,
+            self.treasury.reserve_balance.0,
+        );
         self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 + reserve);
         let candidates = [
-            (LegKind::Owner, self.owner_payout.clone(), split.owner - reserve),
-            (LegKind::Contributor, self.contributor.clone(), split.contributor),
-            (LegKind::ReimbOwner, self.owner_payout.clone(), split.reimb_owner),
+            (
+                LegKind::Owner,
+                self.owner_payout.clone(),
+                split.owner - reserve,
+            ),
+            (
+                LegKind::Contributor,
+                self.contributor.clone(),
+                split.contributor,
+            ),
+            (
+                LegKind::ReimbOwner,
+                self.owner_payout.clone(),
+                split.reimb_owner,
+            ),
             (LegKind::Reserve, env::current_account_id(), reserve),
         ];
         order.legs = candidates
@@ -946,25 +1442,42 @@ impl Contract {
             .filter(|(_, _, amt)| *amt > 0)
             .map(|(kind, recipient, amt)| {
                 // The reserve leg never leaves the contract, so it is settled the moment it is counted.
-                let status = if kind == LegKind::Reserve { LegStatus::Confirmed } else { LegStatus::Pending };
-                Leg { kind, recipient, amount: U128(amt), status, attempts: 1 }
+                let status = if kind == LegKind::Reserve {
+                    LegStatus::Confirmed
+                } else {
+                    LegStatus::Pending
+                };
+                Leg {
+                    kind,
+                    recipient,
+                    amount: U128(amt),
+                    status,
+                    attempts: 1,
+                }
             })
             .collect();
         require!(!order.legs.is_empty(), "nothing to distribute");
-        order.state = if order.legs.iter().all(|l| l.status == LegStatus::Confirmed) { OrderState::Settled } else { OrderState::Settling };
+        order.state = if order.legs.iter().all(|l| l.status == LegStatus::Confirmed) {
+            OrderState::Settled
+        } else {
+            OrderState::Settling
+        };
         order.expenses_counted = U128(split.expenses);
         order.claims = claims;
         let legs = order.legs.clone();
         self.orders.insert(order_id.clone(), order);
 
-        emit("settlement_started", serde_json::json!({
-            "order_id": order_id, "gross": U128(split.expenses + split.distributable),
-            "vendor_paid": U128(split.vendor_paid), "expenses_counted": U128(split.expenses),
-            "distributable": U128(split.distributable), "owner": U128(split.owner),
-            "contributor": U128(split.contributor), "reimb_owner": U128(split.reimb_owner),
-            "contributor_bps": self.contributor_bps, "evm_paid": U128(evm_paid),
-            "reserve_kept": U128(reserve), "reserve_balance": self.treasury.reserve_balance,
-        }));
+        emit(
+            "settlement_started",
+            serde_json::json!({
+                "order_id": order_id, "gross": U128(split.expenses + split.distributable),
+                "vendor_paid": U128(split.vendor_paid), "expenses_counted": U128(split.expenses),
+                "distributable": U128(split.distributable), "owner": U128(split.owner),
+                "contributor": U128(split.contributor), "reimb_owner": U128(split.reimb_owner),
+                "contributor_bps": self.contributor_bps, "evm_paid": U128(evm_paid),
+                "reserve_kept": U128(reserve), "reserve_balance": self.treasury.reserve_balance,
+            }),
+        );
 
         for (i, leg) in legs.iter().enumerate() {
             if leg.status == LegStatus::Pending {
@@ -977,7 +1490,10 @@ impl Contract {
     pub fn retry_leg(&mut self, order_id: String, leg_index: u32) -> Promise {
         self.assert_agent_or_owner();
         let mut order = self.order_or_panic(&order_id);
-        require!(order.state == OrderState::Settling || order.state == OrderState::Refunding, "order has no open legs");
+        require!(
+            order.state == OrderState::Settling || order.state == OrderState::Refunding,
+            "order has no open legs"
+        );
         let leg = order.legs.get_mut(leg_index as usize).expect("no such leg");
         require!(leg.status == LegStatus::Failed, "leg is not failed");
         leg.status = LegStatus::Pending;
@@ -997,13 +1513,27 @@ impl Contract {
         let caller = env::predecessor_account_id();
         let expired = env::block_timestamp() > order.deadline_ns && order.state == OrderState::Paid;
         require!(
-            (caller == self.owner && matches!(order.state, OrderState::Paid | OrderState::Fulfilled)) || expired,
+            (caller == self.owner
+                && matches!(order.state, OrderState::Paid | OrderState::Fulfilled))
+                || expired,
             "refund not permitted"
         );
-        require!(!order.purchases.iter().any(|p| p.status == PurchaseStatus::Sending), "a purchase is in flight");
+        require!(
+            !order
+                .purchases
+                .iter()
+                .any(|p| p.status == PurchaseStatus::Sending),
+            "a purchase is in flight"
+        );
         if let Some(mut list) = self.evm_purchases.get(&order_id).cloned() {
-            require!(!list.iter().any(|p| p.status == EvmPurchaseStatus::Signing), "a cross-chain signature is in flight");
-            for p in list.iter_mut().filter(|p| p.status == EvmPurchaseStatus::AwaitingApproval) {
+            require!(
+                !list.iter().any(|p| p.status == EvmPurchaseStatus::Signing),
+                "a cross-chain signature is in flight"
+            );
+            for p in list
+                .iter_mut()
+                .filter(|p| p.status == EvmPurchaseStatus::AwaitingApproval)
+            {
                 p.status = EvmPurchaseStatus::Rejected;
             }
             self.evm_purchases.insert(order_id.clone(), list);
@@ -1015,39 +1545,222 @@ impl Contract {
         }
         let escrow = order.gross.0 - order.vendor_paid() + order.refund_top_up.0;
         // The business reserve covers what escrow and any top-up do not.
-        let from_reserve = order.gross.0.saturating_sub(escrow).min(self.treasury.reserve_balance.0);
+        let from_reserve = order
+            .gross
+            .0
+            .saturating_sub(escrow)
+            .min(self.treasury.reserve_balance.0);
         self.treasury.reserve_balance = U128(self.treasury.reserve_balance.0 - from_reserve);
         let amount = escrow + from_reserve;
         let shortfall = order.gross.0.saturating_sub(amount);
-        let leg = Leg { kind: LegKind::Refund, recipient: order.customer.clone(), amount: U128(amount), status: LegStatus::Pending, attempts: 1 };
+        let leg = Leg {
+            kind: LegKind::Refund,
+            recipient: order.customer.clone(),
+            amount: U128(amount),
+            status: LegStatus::Pending,
+            attempts: 1,
+        };
         order.legs = vec![leg.clone()];
         order.state = OrderState::Refunding;
         self.orders.insert(order_id.clone(), order);
-        emit("refund_started", serde_json::json!({ "order_id": order_id, "amount": leg.amount, "to": leg.recipient, "shortfall": U128(shortfall), "from_reserve": U128(from_reserve) }));
+        emit(
+            "refund_started",
+            serde_json::json!({ "order_id": order_id, "amount": leg.amount, "to": leg.recipient, "shortfall": U128(shortfall), "from_reserve": U128(from_reserve) }),
+        );
         self.send_leg(&order_id, 0, &leg)
     }
 
     #[private]
-    pub fn on_leg_resolved(&mut self, order_id: String, leg_index: u32, #[callback_result] result: Result<(), PromiseError>) {
+    pub fn on_leg_resolved(
+        &mut self,
+        order_id: String,
+        leg_index: u32,
+        #[callback_result] result: Result<(), PromiseError>,
+    ) {
         let mut order = self.order_or_panic(&order_id);
         let ok = result.is_ok();
         let (kind, recipient, amount) = {
             let leg = order.legs.get_mut(leg_index as usize).expect("no such leg");
-            leg.status = if ok { LegStatus::Confirmed } else { LegStatus::Failed };
+            leg.status = if ok {
+                LegStatus::Confirmed
+            } else {
+                LegStatus::Failed
+            };
             (leg.kind, leg.recipient.clone(), leg.amount)
         };
-        emit(if ok { "leg_confirmed" } else { "leg_failed" }, serde_json::json!({
-            "order_id": order_id, "leg_index": leg_index, "kind": kind, "recipient": recipient, "amount": amount,
-        }));
+        emit(
+            if ok { "leg_confirmed" } else { "leg_failed" },
+            serde_json::json!({
+                "order_id": order_id, "leg_index": leg_index, "kind": kind, "recipient": recipient, "amount": amount,
+            }),
+        );
         if order.legs.iter().all(|l| l.status == LegStatus::Confirmed) {
             order.state = match order.state {
                 OrderState::Settling => OrderState::Settled,
                 OrderState::Refunding => OrderState::Refunded,
                 s => s,
             };
-            emit(if order.state == OrderState::Refunded { "order_refunded" } else { "order_settled" }, serde_json::json!({ "order_id": order_id }));
+            emit(
+                if order.state == OrderState::Refunded {
+                    "order_refunded"
+                } else {
+                    "order_settled"
+                },
+                serde_json::json!({ "order_id": order_id }),
+            );
         }
         self.orders.insert(order_id, order);
+    }
+
+    // ---------- subscriptions ----------
+
+    /// Agent opens the next issue of a subscription once it is due: moves exactly
+    /// one issue's price from the subscription escrow into a new order
+    /// `<subscription_id>-<n>` for the same customer. Returns the order id.
+    pub fn start_issue(&mut self, subscription_id: String) -> String {
+        self.assert_agent();
+        require!(!self.paused, "paused");
+        let mut sub = self
+            .subscriptions
+            .get(&subscription_id)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("unknown subscription"));
+        require!(
+            sub.state == SubscriptionState::Active,
+            "subscription is not active"
+        );
+        require!(sub.issues_started < sub.issues_total, "no issues left");
+        let now = env::block_timestamp();
+        require!(now >= sub.next_due_ns, "next issue is not due yet");
+        require!(sub.escrow.0 >= sub.issue_price.0, "escrow too low");
+        let n = sub.issues_started + 1;
+        let order_id = format!("{subscription_id}-{n}");
+        require!(!self.orders.contains_key(&order_id), "issue order exists");
+        self.orders.insert(
+            order_id.clone(),
+            Order {
+                sku: sub.sku.clone(),
+                customer: sub.customer.clone(),
+                gross: sub.issue_price,
+                state: OrderState::Paid,
+                paid_at_ns: now,
+                deadline_ns: now + self.order_ttl_ns,
+                report_hash: None,
+                purchases: vec![],
+                refund_top_up: U128(0),
+                expenses_counted: U128(0),
+                claims: vec![],
+                legs: vec![],
+            },
+        );
+        sub.escrow = U128(sub.escrow.0 - sub.issue_price.0);
+        sub.issues_started = n;
+        sub.next_due_ns = now + sub.interval_ns;
+        if n == sub.issues_total {
+            sub.state = SubscriptionState::Completed;
+        }
+        emit(
+            "issue_started",
+            serde_json::json!({
+                "subscription_id": subscription_id, "order_id": order_id, "issue": n, "of": sub.issues_total,
+                "amount": sub.issue_price, "escrow_left": sub.escrow, "next_due_ns": sub.next_due_ns,
+            }),
+        );
+        self.subscriptions.insert(subscription_id, sub);
+        order_id
+    }
+
+    /// Customer or owner stops a subscription. Every unstarted issue is refunded
+    /// to the customer in full; issues already started finish as normal orders.
+    /// Works while the business is paused.
+    pub fn cancel_subscription(&mut self, subscription_id: String) {
+        let mut sub = self
+            .subscriptions
+            .get(&subscription_id)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("unknown subscription"));
+        let caller = env::predecessor_account_id();
+        require!(
+            caller == sub.customer || caller == self.owner,
+            "customer or owner only"
+        );
+        require!(
+            sub.state == SubscriptionState::Active,
+            "subscription is not active"
+        );
+        let amount = sub.escrow;
+        sub.escrow = U128(0);
+        sub.state = SubscriptionState::Cancelled;
+        let refund = (amount.0 > 0).then(|| Leg {
+            kind: LegKind::Refund,
+            recipient: sub.customer.clone(),
+            amount,
+            status: LegStatus::Pending,
+            attempts: 1,
+        });
+        sub.refund = refund.clone();
+        let unstarted = sub.issues_total - sub.issues_started;
+        self.subscriptions.insert(subscription_id.clone(), sub);
+        emit(
+            "subscription_cancelled",
+            serde_json::json!({ "subscription_id": subscription_id, "by": caller, "issues_unstarted": unstarted, "refund": amount }),
+        );
+        if let Some(leg) = refund {
+            self.send_subscription_refund(&subscription_id, &leg)
+                .detach();
+        }
+    }
+
+    /// Re-sends a failed subscription refund.
+    pub fn retry_subscription_refund(&mut self, subscription_id: String) -> Promise {
+        let mut sub = self
+            .subscriptions
+            .get(&subscription_id)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("unknown subscription"));
+        let caller = env::predecessor_account_id();
+        require!(
+            caller == sub.customer || caller == self.owner || caller == self.agent,
+            "not permitted"
+        );
+        let leg = sub.refund.as_mut().expect("no refund");
+        require!(leg.status == LegStatus::Failed, "refund is not failed");
+        leg.status = LegStatus::Pending;
+        leg.attempts += 1;
+        let leg = leg.clone();
+        self.subscriptions.insert(subscription_id.clone(), sub);
+        self.send_subscription_refund(&subscription_id, &leg)
+    }
+
+    #[private]
+    pub fn on_subscription_refunded(
+        &mut self,
+        subscription_id: String,
+        #[callback_result] result: Result<(), PromiseError>,
+    ) {
+        let mut sub = self
+            .subscriptions
+            .get(&subscription_id)
+            .cloned()
+            .expect("unknown subscription");
+        let ok = result.is_ok();
+        let leg = sub.refund.as_mut().expect("no refund");
+        leg.status = if ok {
+            LegStatus::Confirmed
+        } else {
+            LegStatus::Failed
+        };
+        emit(
+            if ok {
+                "subscription_refunded"
+            } else {
+                "subscription_refund_failed"
+            },
+            serde_json::json!({
+                "subscription_id": subscription_id, "amount": leg.amount, "to": leg.recipient,
+            }),
+        );
+        self.subscriptions.insert(subscription_id, sub);
     }
 
     // ---------- views ----------
@@ -1073,11 +1786,25 @@ impl Contract {
     }
 
     pub fn get_products(&self) -> Vec<(String, Product)> {
-        self.products.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+        self.products
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     pub fn get_vendors(&self) -> Vec<(AccountId, bool)> {
         self.vendors.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    pub fn get_subscription(&self, subscription_id: String) -> Option<Subscription> {
+        self.subscriptions.get(&subscription_id).cloned()
+    }
+
+    pub fn get_subscription_plans(&self) -> Vec<(String, SubscriptionPlan)> {
+        self.subscription_plans
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     pub fn get_treasury(&self) -> Treasury {
@@ -1089,7 +1816,10 @@ impl Contract {
     }
 
     pub fn get_evm_vendors(&self) -> Vec<(String, bool)> {
-        self.evm_vendors.iter().map(|(k, v)| (k.clone(), *v)).collect()
+        self.evm_vendors
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect()
     }
 
     pub fn get_evm_nonce(&self) -> u64 {
@@ -1097,22 +1827,115 @@ impl Contract {
     }
 
     pub fn get_evm_purchases(&self, order_id: String) -> Vec<EvmPurchase> {
-        self.evm_purchases.get(&order_id).cloned().unwrap_or_default()
+        self.evm_purchases
+            .get(&order_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// The unsigned transaction a purchase signs (hex), so anyone can rebuild and check it.
     pub fn get_evm_unsigned_tx(&self, order_id: String, index: u32) -> Option<String> {
-        let p = self.evm_purchases.get(&order_id)?.get(index as usize)?.clone();
-        Some(evm::to_hex(&evm::unsigned_eip1559(&Self::evm_tx(&p, p.nonce?))))
+        let p = self
+            .evm_purchases
+            .get(&order_id)?
+            .get(index as usize)?
+            .clone();
+        Some(evm::to_hex(&evm::unsigned_eip1559(&Self::evm_tx(
+            &p, p.nonce?,
+        ))))
     }
 
     // ---------- internals ----------
 
-    fn send_purchase(&self, order_id: &str, index: u32, vendor: &AccountId, amount: U128) -> Promise {
+    /// Validates and records a prepaid subscription. Errors are rejection reasons.
+    fn subscribe(
+        &mut self,
+        customer: &AccountId,
+        amount: U128,
+        m: SubscribeMsg,
+    ) -> Result<(), &'static str> {
+        // `-<n>` is appended for issue orders, which must still be valid ids.
+        if !valid_id(&m.subscription_id)
+            || m.subscription_id.len() > MAX_ID_LEN - 4
+            || !valid_id(&m.sku)
+        {
+            return Err("bad_id");
+        }
+        let product = match self.products.get(&m.sku) {
+            Some(p) if p.active => p.clone(),
+            _ => return Err("unknown_sku"),
+        };
+        let plan = match self.subscription_plans.get(&m.sku) {
+            Some(p) if p.active => p.clone(),
+            _ => return Err("no_subscription_plan"),
+        };
+        if m.issues < plan.min_issues || m.issues > plan.max_issues {
+            return Err("issues_out_of_range");
+        }
+        if Some(amount.0) != product.price.0.checked_mul(m.issues as u128) {
+            return Err("wrong_amount");
+        }
+        if self.subscriptions.contains_key(&m.subscription_id) {
+            return Err("duplicate_subscription");
+        }
+        let now = env::block_timestamp();
+        self.subscriptions.insert(
+            m.subscription_id.clone(),
+            Subscription {
+                sku: m.sku.clone(),
+                customer: customer.clone(),
+                issue_price: product.price,
+                issues_total: m.issues,
+                issues_started: 0,
+                interval_ns: plan.interval_ns,
+                created_ns: now,
+                next_due_ns: now,
+                escrow: amount,
+                state: SubscriptionState::Active,
+                refund: None,
+            },
+        );
+        emit(
+            "subscription_started",
+            serde_json::json!({
+                "subscription_id": m.subscription_id, "sku": m.sku, "customer": customer, "amount": amount,
+                "issues": m.issues, "issue_price": product.price, "interval_ns": plan.interval_ns,
+            }),
+        );
+        Ok(())
+    }
+
+    fn send_subscription_refund(&self, subscription_id: &str, leg: &Leg) -> Promise {
         ext_ft::ext(self.token_id.clone())
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(FT_TRANSFER_GAS)
-            .ft_transfer(vendor.clone(), amount, Some(format!("buffer:{order_id}:purchase:{index}")))
+            .ft_transfer(
+                leg.recipient.clone(),
+                leg.amount,
+                Some(format!("buffer:{subscription_id}:refund")),
+            )
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(CALLBACK_GAS)
+                    .on_subscription_refunded(subscription_id.to_string()),
+            )
+    }
+
+    fn send_purchase(
+        &self,
+        order_id: &str,
+        index: u32,
+        vendor: &AccountId,
+        amount: U128,
+    ) -> Promise {
+        ext_ft::ext(self.token_id.clone())
+            .with_attached_deposit(ONE_YOCTO)
+            .with_static_gas(FT_TRANSFER_GAS)
+            .ft_transfer(
+                vendor.clone(),
+                amount,
+                Some(format!("buffer:{order_id}:purchase:{index}")),
+            )
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(CALLBACK_GAS)
@@ -1124,7 +1947,11 @@ impl Contract {
         ext_ft::ext(self.token_id.clone())
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(FT_TRANSFER_GAS)
-            .ft_transfer(leg.recipient.clone(), leg.amount, Some(format!("buffer:{order_id}:{leg_index}")))
+            .ft_transfer(
+                leg.recipient.clone(),
+                leg.amount,
+                Some(format!("buffer:{order_id}:{leg_index}")),
+            )
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(CALLBACK_GAS)
@@ -1147,7 +1974,11 @@ impl Contract {
 
     /// Assigns the next treasury nonce, fixes the payload hash and asks the MPC network to sign it.
     fn start_signing(&mut self, order_id: &str, index: u32, cfg: &EvmConfig) -> Promise {
-        let mut list = self.evm_purchases.get(order_id).cloned().expect("no evm purchases");
+        let mut list = self
+            .evm_purchases
+            .get(order_id)
+            .cloned()
+            .expect("no evm purchases");
         let p = list.get_mut(index as usize).expect("no such evm purchase");
         let nonce = self.evm_nonce;
         self.evm_nonce += 1;
@@ -1156,26 +1987,52 @@ impl Contract {
         p.nonce = Some(nonce);
         p.payload_hash = Some(hash_hex.clone());
         self.evm_purchases.insert(order_id.to_string(), list);
-        emit("evm_signature_requested", serde_json::json!({ "order_id": order_id, "index": index, "nonce": nonce, "payload_hash": hash_hex }));
+        emit(
+            "evm_signature_requested",
+            serde_json::json!({ "order_id": order_id, "index": index, "nonce": nonce, "payload_hash": hash_hex }),
+        );
         ext_mpc::ext(cfg.mpc_contract.clone())
             .with_attached_deposit(ONE_YOCTO)
             .with_static_gas(MPC_SIGN_GAS)
-            .sign(MpcSignRequest { path: EVM_TREASURY_PATH.to_string(), payload_v2: MpcPayload::Ecdsa(hash_hex), domain_id: 0 })
-            .then(Self::ext(env::current_account_id()).with_static_gas(SIGN_CALLBACK_GAS).on_evm_signed(order_id.to_string(), index))
+            .sign(MpcSignRequest {
+                path: EVM_TREASURY_PATH.to_string(),
+                payload_v2: MpcPayload::Ecdsa(hash_hex),
+                domain_id: 0,
+            })
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(SIGN_CALLBACK_GAS)
+                    .on_evm_signed(order_id.to_string(), index),
+            )
     }
 
     /// NEAR purchases plus cross-chain purchases that count against the cap.
     fn committed_spend(&self, order_id: &str, order: &Order) -> u128 {
-        let evm: u128 = self.evm_purchases.get(order_id).map(|l| l.iter().filter(|p| p.committed()).map(|p| p.amount.0).sum()).unwrap_or(0);
+        let evm: u128 = self
+            .evm_purchases
+            .get(order_id)
+            .map(|l| l.iter().filter(|p| p.committed()).map(|p| p.amount.0).sum())
+            .unwrap_or(0);
         order.vendor_committed() + evm
     }
 
     fn evm_signed_total(&self, order_id: &str) -> u128 {
-        self.evm_purchases.get(order_id).map(|l| l.iter().filter(|p| p.status == EvmPurchaseStatus::Signed).map(|p| p.amount.0).sum()).unwrap_or(0)
+        self.evm_purchases
+            .get(order_id)
+            .map(|l| {
+                l.iter()
+                    .filter(|p| p.status == EvmPurchaseStatus::Signed)
+                    .map(|p| p.amount.0)
+                    .sum()
+            })
+            .unwrap_or(0)
     }
 
     fn order_or_panic(&self, order_id: &str) -> Order {
-        self.orders.get(order_id).cloned().unwrap_or_else(|| env::panic_str("unknown order"))
+        self.orders
+            .get(order_id)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("unknown order"))
     }
 
     fn assert_owner(&self) {
@@ -1192,8 +2049,14 @@ impl Contract {
     }
 
     fn assert_config_valid(&self) {
-        require!(self.contributor_bps as u128 <= BPS_DENOMINATOR, "contributor_bps out of range");
-        require!(self.contributor != self.agent && self.owner_payout != self.agent, "agent cannot be a revenue recipient");
+        require!(
+            self.contributor_bps as u128 <= BPS_DENOMINATOR,
+            "contributor_bps out of range"
+        );
+        require!(
+            self.contributor != self.agent && self.owner_payout != self.agent,
+            "agent cannot be a revenue recipient"
+        );
         require!(self.order_ttl_ns > 0, "order_ttl_ns must be positive");
     }
 }

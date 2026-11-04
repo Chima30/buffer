@@ -5,7 +5,8 @@
  * a wallet-signed transaction, so this route grants no admin power.
  */
 import { connection } from "next/server";
-import { getConfig, getTreasury } from "@/lib/server/contract";
+import { getConfig, getSubscriptionPlans, getTreasury } from "@/lib/server/contract";
+import { viewFunction } from "@/lib/server/near-rpc";
 import { editableValues } from "@/lib/domain/policy/draft";
 import type { PolicyDocument } from "@/lib/domain/policy/schema";
 import { promoteAnchoredDraft } from "@/lib/server/business";
@@ -84,6 +85,33 @@ export async function GET() {
     : null;
   const treasury = t ? { address: t.address, eth: t.eth.toString(), usdc: t.usdc.toString(), explorerUrl: sepoliaConfig().explorerAddressUrl(t.address) } : null;
 
+  // Subscriptions: what the contract allows, what the owner still has to switch on, and recent ones.
+  const [plans, chainProducts, subProduct, subs] = await Promise.all([
+    getSubscriptionPlans(),
+    viewFunction<[string, { price: string; max_expense: string; active: boolean }][]>(near.contractId, "get_products").catch(() => []),
+    db().from("products").select("sku,title,price_units,max_expense_units").eq("kind", "subscription").limit(1).maybeSingle(),
+    db().from("subscriptions").select("id,onchain_subscription_id,state,issues_total,issues_started,issue_price_units,customer_account,next_due_at,refund_units,refund_status,created_at").neq("state", "AWAITING_PAYMENT").order("created_at", { ascending: false }).limit(8),
+  ]);
+  const sp = subProduct.data;
+  const onchainProduct = sp ? chainProducts.find(([sku]) => sku === sp.sku)?.[1] : undefined;
+  const plan = sp ? (plans ?? []).find(([sku]) => sku === sp.sku)?.[1] : undefined;
+  const subscriptionSetup = sp
+    ? {
+        sku: sp.sku,
+        title: sp.title,
+        contractSupports: plans !== null,
+        product: onchainProduct ? { price: onchainProduct.price, maxExpense: onchainProduct.max_expense, active: onchainProduct.active } : null,
+        plan: plan ?? null,
+        // Testnet demo pace: one issue an hour, 2 to 8 issues.
+        steps: [
+          ...(!onchainProduct || onchainProduct.price !== String(sp.price_units) || !onchainProduct.active
+            ? [{ label: `List ${sp.title} at ${Number(sp.price_units) / 1e6} USDC an issue`, method: "set_product", args: { sku: sp.sku, price: String(sp.price_units), max_expense: String(sp.max_expense_units), active: true } }]
+            : []),
+          ...(!plan?.active ? [{ label: "Switch on subscriptions: 2 to 8 issues, one an hour", method: "set_subscription_plan", args: { sku: sp.sku, interval_ns: 3_600_000_000_000, min_issues: 2, max_issues: 8, active: true } }] : []),
+        ],
+      }
+    : null;
+
   // Low balances that would stall the business during judging.
   const YOCTO = 10n ** 24n;
   const alerts: string[] = [];
@@ -123,6 +151,8 @@ export async function GET() {
       contributorPaid: paid("contributor"),
       reserveKept: paid("reserve"),
     },
+    subscriptionSetup,
+    subscriptions: subs.data ?? [],
     pendingApprovals: pending.data ?? [],
     orders: orders.data ?? [],
     recentActions: actions.data ?? [],
