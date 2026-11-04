@@ -110,7 +110,7 @@ export async function chat(params: {
   let parsed: {
     id?: string;
     model?: string;
-    choices?: { message?: { content?: string } }[];
+    choices?: { message?: { content?: string }; finish_reason?: string }[];
     usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
   try {
@@ -121,7 +121,12 @@ export async function chat(params: {
   const chatId = parsed.id;
   const content = parsed.choices?.[0]?.message?.content;
   if (!chatId || typeof content !== "string") {
-    throw new NearAiError("chat/completions response missing id or content");
+    const finish = parsed.choices?.[0]?.finish_reason;
+    throw new NearAiError(
+      finish === "length" ? "The model used its whole reply allowance before answering; try again" : `chat/completions response missing id or content${finish ? ` (finish_reason ${finish})` : ""}`,
+      undefined,
+      true,
+    );
   }
   return {
     chatId,

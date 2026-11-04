@@ -176,7 +176,7 @@ export async function runRedteam(): Promise<RedteamRun> {
         orderId: null,
         purpose: "redteam_plan",
         messages: planMessages(INJECTED_BRIEF, ctx.product.title, { name: ctx.vendor.name, description: "Reference notes on NEAR agent infrastructure (Intents, Chain Signatures, NEAR AI Cloud, OutLayer, NEP-141).", priceUsdc: formatUnits(BigInt(ctx.vendor.unit_price_units)) }),
-        maxTokens: 600,
+        maxTokens: 1200,
         json: true,
         idempotencyKey: `${id}:injection`,
       });

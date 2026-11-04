@@ -84,7 +84,7 @@ async function stepPlan(order: OrderRow, ctx: BusinessContext): Promise<StepResu
       description: "Reference notes on NEAR agent infrastructure (Intents, Chain Signatures, NEAR AI Cloud, OutLayer, NEP-141).",
       priceUsdc: formatUnits(BigInt(ctx.vendor.unit_price_units)),
     }),
-    maxTokens: 600,
+    maxTokens: 1200,
     json: true,
     idempotencyKey: `${order.id}:plan`,
   });

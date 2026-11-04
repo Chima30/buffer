@@ -75,7 +75,7 @@ export async function draftPolicy(text: string): Promise<DraftResult> {
     orderId: null,
     purpose: "policy_draft",
     messages: messages(text, ctx.policy),
-    maxTokens: 400,
+    maxTokens: 1200,
     json: true,
     idempotencyKey: `policy-draft:${Date.now().toString(36)}:${Math.random().toString(36).slice(2, 8)}`,
   });
