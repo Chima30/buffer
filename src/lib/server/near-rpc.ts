@@ -62,7 +62,8 @@ export async function verifyTransaction(txHash: string, senderAccountId: string)
     r = await rpc<TxStatusResult>("tx", { tx_hash: txHash, sender_account_id: senderAccountId, wait_until: "FINAL" });
   } catch (e) {
     const msg = (e as Error).message;
-    if (/UNKNOWN_TRANSACTION|TIMEOUT_ERROR/.test(msg)) return { state: "PENDING" };
+    // Not indexed yet, or the RPC node timed out / is overloaded: ask again later.
+    if (/UNKNOWN_TRANSACTION|TIMEOUT_ERROR|HTTP 408|HTTP 429|HTTP 5\d\d/.test(msg)) return { state: "PENDING" };
     throw e;
   }
   const s = r.status;
