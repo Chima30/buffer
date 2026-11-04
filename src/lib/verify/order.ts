@@ -7,7 +7,7 @@
  * No secrets, no keys, no Buffer server code: anyone can run it.
  */
 import bs58 from "bs58";
-import { createRemoteJWKSet, jwtVerify } from "jose";
+import { createRemoteJWKSet, decodeJwt, jwtVerify } from "jose";
 import { createPublicClient, decodeEventLog, erc20Abi, http, keccak256, parseTransaction, recoverMessageAddress, recoverTransactionAddress, serializeTransaction, type Hex, type TransactionSerializableEIP1559 } from "viem";
 import { publicKeyToAddress } from "viem/accounts";
 import { sepolia } from "viem/chains";
@@ -248,8 +248,11 @@ export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
     const token = p.gpu_attestation_detail?.nras_platform_token;
     if (token) {
       try {
-        const { payload } = await jwtVerify(token, jwks);
-        add("Inference", `${p.purpose} GPU attestation`, payload["x-nvidia-overall-att-result"] === true, `NVIDIA NRAS verdict signed by NVIDIA, issued ${typeof payload.iat === "number" ? new Date(payload.iat * 1000).toISOString() : "?"}`);
+        // NRAS tokens live about an hour. Check NVIDIA's signature, and that the token was valid when it was issued.
+        const iat = decodeJwt(token).iat;
+        const { payload } = await jwtVerify(token, jwks, typeof iat === "number" ? { currentDate: new Date((iat + 1) * 1000) } : {});
+        const issued = typeof payload.iat === "number" ? new Date(payload.iat * 1000).toISOString() : "?";
+        add("Inference", `${p.purpose} GPU attestation`, payload["x-nvidia-overall-att-result"] === true, `NVIDIA NRAS verdict, signed by NVIDIA and valid when issued (${issued})`);
       } catch (e) {
         add("Inference", `${p.purpose} GPU attestation`, false, `NRAS token did not verify: ${(e as Error).message}`);
       }
