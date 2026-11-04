@@ -50,7 +50,8 @@ export function baselinePolicy(input: BusinessDraftInput): PolicyDocument {
   const vendorId = "vendor-1";
   const agentId = "agent";
   const contract = contractIdFor(input.productSku, input.owner);
-  const half = (toUnits(input.price) / 2n).toString();
+  // Default approval threshold: half the per-order spending cap, so large purchases always need the owner.
+  const half = (toUnits(input.maxExpense) / 2n).toString();
   const rules: PolicyDocument["rules"] = {
     emergency: { shutdown: false },
     token_id: NEAR_TESTNET_USDC,
@@ -68,6 +69,14 @@ export function baselinePolicy(input: BusinessDraftInput): PolicyDocument {
   return { version: 1, business_id: "draft", rules };
 }
 
+export interface ChecklistStep {
+  step: string;
+  detail: string;
+  command?: string;
+  /** Set when a NEAR wallet can sign this step instead of near-cli. */
+  call?: { contractId: string; method: string; args: Record<string, unknown> };
+}
+
 export interface BusinessDraft {
   contractId: string;
   policy: PolicyDocument;
@@ -76,7 +85,7 @@ export interface BusinessDraft {
   warnings: string[];
   errors: string[];
   initArgs: Record<string, unknown>;
-  checklist: { step: string; detail: string; command?: string }[];
+  checklist: ChecklistStep[];
 }
 
 /** Applies the translated rules (if any) and lays out the launch plan. Creates nothing. */
@@ -100,15 +109,16 @@ export function buildBusinessDraft(input: BusinessDraftInput, edit: PolicyEdit |
   };
   const call = (method: string, args: Record<string, unknown>) =>
     `near --% contract call-function as-transaction ${contractId} ${method} json-args "${JSON.stringify(args).replace(/"/g, '\\"')}" prepaid-gas "30 Tgas" attached-deposit "0 NEAR" sign-as ${input.owner} network-config testnet sign-with-keychain send`;
+  const fn = (method: string, args: Record<string, unknown>) => ({ command: call(method, args), call: { contractId, method, args } });
   const checklist: BusinessDraft["checklist"] = [
-    { step: "Create the contract account", detail: `A sub-account of your owner account holds the business contract.`, command: `near account create-account fund-myself ${contractId} '5 NEAR' autogenerate-new-keypair save-to-keychain sign-as ${input.owner} network-config testnet sign-with-keychain send` },
-    { step: "Create the agent wallet", detail: "OutLayer derives the agent's key inside a TEE; you never see it. Then set its policy so it can only call your contract.", command: "npm run outlayer:register && npm run outlayer:policy" },
-    { step: "Deploy the Buffer contract", detail: "The same audited wasm as the Research Desk, with your accounts and split.", command: `near contract deploy ${contractId} use-file buffer_desk.wasm with-init-call new json-args '${JSON.stringify(initArgs)}' prepaid-gas "100 Tgas" attached-deposit "0 NEAR" network-config testnet sign-with-keychain send` },
-    { step: "List the product", detail: `${input.productTitle} at ${input.price} USDC, at most ${input.maxExpense} USDC of expenses per order.`, command: call("set_product", { sku: input.productSku, price: toUnits(input.price).toString(), max_expense: toUnits(input.maxExpense).toString(), active: true }) },
+    { step: "Create the contract account", detail: "A sub-account of your owner account holds the business contract. Needs near-cli: a browser wallet cannot create it", command: `near account create-account fund-myself ${contractId} '5 NEAR' autogenerate-new-keypair save-to-keychain sign-as ${input.owner} network-config testnet sign-with-keychain send` },
+    { step: "Create the agent wallet", detail: "Each business runs as its own copy of Buffer, so do this in a fresh copy of the repository with its own .env.local. OutLayer derives the agent's key inside a TEE; you never see it. The policy step limits it to your contract", command: "npm run outlayer:register && npm run outlayer:policy" },
+    { step: "Deploy the Buffer contract", detail: "The same tested contract as the Research Desk, with your accounts and split. Needs near-cli", command: `near contract deploy ${contractId} use-file buffer_desk.wasm with-init-call new json-args '${JSON.stringify(initArgs)}' prepaid-gas "100 Tgas" attached-deposit "0 NEAR" network-config testnet sign-with-keychain send` },
+    { step: "List the product", detail: `${input.productTitle} at ${input.price} USDC, at most ${input.maxExpense} USDC of expenses per order`, ...fn("set_product", { sku: input.productSku, price: toUnits(input.price).toString(), max_expense: toUnits(input.maxExpense).toString(), active: true }) },
     input.vendorChain === "near"
-      ? { step: "Approve the vendor", detail: `${input.vendorName}, paid on NEAR from each order's escrow.`, command: call("set_vendor", { vendor: input.vendorAccount.toLowerCase(), approved: true }) }
-      : { step: "Approve the vendor on Ethereum", detail: `${input.vendorName}, paid on Sepolia from the contract's Chain Signatures treasury. Configure Ethereum first (set_evm_config), then approve the address.`, command: call("set_evm_vendor", { vendor: input.vendorAccount.toLowerCase(), approved: true }) },
-    { step: "Sign the policy", detail: `Anchors policy v1 (sha256 ${hash.slice(0, 12)}…). The agent refuses to act under any other rules.`, command: call("set_policy_hash", { version: 1, hash }) },
+      ? { step: "Approve the vendor", detail: `${input.vendorName}, paid on NEAR from each order's escrow`, ...fn("set_vendor", { vendor: input.vendorAccount.toLowerCase(), approved: true }) }
+      : { step: "Approve the vendor on Ethereum", detail: `${input.vendorName}, paid on Sepolia from the contract's Chain Signatures treasury. Configure Ethereum first (set_evm_config), then approve the address`, ...fn("set_evm_vendor", { vendor: input.vendorAccount.toLowerCase(), approved: true }) },
+    { step: "Sign the policy", detail: `Anchors policy v1 (sha256 ${hash.slice(0, 12)}…). The agent refuses to act under any other rules`, ...fn("set_policy_hash", { version: 1, hash }) },
   ];
   return { contractId, policy: edited, policyHash: hash, changes: edit ? describeChanges(base, { ...edited, version: base.version }) : [], warnings: lint.warnings, errors: lint.errors.filter((e) => !e.startsWith("Version must")), initArgs, checklist };
 }

@@ -29,11 +29,18 @@ describe("start-a-business draft", () => {
     expect(businessDraftInput.safeParse({ ...form, contributor: "ada.testnet" }).success).toBe(false);
   });
 
+  it("defaults the approval threshold to half the spending cap, so it always applies", () => {
+    const p = baselinePolicy(businessDraftInput.parse(form));
+    expect(p.rules.approvals[0].when.amount_above_units).toBe("4500000");
+    expect(BigInt(p.rules.approvals[0].when.amount_above_units!)).toBeLessThan(BigInt(p.rules.procurement.max_per_purchase_units));
+  });
+
   it("builds a valid policy with the same safety rules as the Research Desk", () => {
     const p = baselinePolicy(businessDraftInput.parse(form));
     expect(policyDocumentSchema.parse(p)).toEqual(p);
     expect(p.rules.revenue.contributor_bps).toBe(2000);
-    expect(evaluate(p, { tool: "request_purchase", agentId: "agent", orderId: "o", amountUnits: 6_000_000n, tokenId: p.rules.token_id, destination: "marketdata.testnet", vendorId: "vendor-1" }, ctx).outcome).toBe("allow");
+    expect(evaluate(p, { tool: "request_purchase", agentId: "agent", orderId: "o", amountUnits: 4_000_000n, tokenId: p.rules.token_id, destination: "marketdata.testnet", vendorId: "vendor-1" }, ctx).outcome).toBe("allow");
+    expect(evaluate(p, { tool: "request_purchase", agentId: "agent", orderId: "o", amountUnits: 6_000_000n, tokenId: p.rules.token_id, destination: "marketdata.testnet", vendorId: "vendor-1" }, ctx).outcome).toBe("needs_approval");
     expect(evaluate(p, { tool: "request_purchase", agentId: "agent", orderId: "o", amountUnits: 6_000_000n, tokenId: p.rules.token_id, destination: "mallory.testnet", vendorId: "vendor-1" }, ctx)).toMatchObject({ outcome: "deny", absolute: true });
   });
 
@@ -42,6 +49,9 @@ describe("start-a-business draft", () => {
     expect(d.errors).toEqual([]);
     expect(d.changes.map((c) => c.field)).toEqual(["approval_above_usdc"]);
     expect(d.initArgs.purchase_approval_above).toBe("5000000");
+    // Wallet-signable steps carry the call; account creation and deploy do not.
+    expect(d.checklist.filter((c) => c.call).map((c) => c.call?.method)).toEqual(["set_product", "set_vendor", "set_policy_hash"]);
+    expect(JSON.stringify(d.checklist)).not.toMatch(/audited/i);
     expect(d.contractId).toBe("food-prices.ada.testnet");
     expect(d.checklist.at(-1)?.command).toContain(d.policyHash);
     expect(d.policy.version).toBe(1);

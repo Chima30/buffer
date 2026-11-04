@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { txHashOf, useNearWallet } from "@/components/wallet";
 
 interface Draft {
   contractId: string;
@@ -9,7 +10,7 @@ interface Draft {
   changes: { label: string; from: string; to: string }[];
   warnings: string[];
   errors: string[];
-  checklist: { step: string; detail: string; command?: string }[];
+  checklist: { step: string; detail: string; command?: string; call?: { contractId: string; method: string; args: Record<string, unknown> } }[];
   translation: { verification: string; unsupported: string[] } | null;
 }
 
@@ -124,23 +125,55 @@ export default function NewBusinessPage() {
               <h2 className="font-medium">Launch checklist for {draft.contractId}</h2>
               <button onClick={download} className="rounded-md border border-rule-strong px-3 py-1 text-xs">Download plan (JSON)</button>
             </div>
-            <ol className="mt-3 space-y-4 text-sm">
+            <ul className="mt-3 space-y-5 text-sm">
               {draft.checklist.map((c, i) => (
-                <li key={c.step}>
-                  <div className="font-medium">{i + 1}. {c.step}</div>
-                  <p className="text-xs text-ink-2">{c.detail}</p>
-                  {c.command && (
-                    <>
-                      <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-md bg-paper p-2 font-mono text-[11px]">{c.command}</pre>
-                      <button type="button" onClick={() => navigator.clipboard.writeText(c.command ?? "")} className="mt-1 text-xs text-accent">Copy</button>
-                    </>
-                  )}
+                <li key={c.step} className="grid grid-cols-[24px_1fr] gap-x-2">
+                  <span className="font-mono text-xs leading-5 text-ink-3">{String(i + 1).padStart(2, "0")}</span>
+                  <div className="min-w-0">
+                    <div className="font-medium">{c.step}</div>
+                    <p className="text-xs text-ink-2">{c.detail}</p>
+                    {c.call && <WalletStep call={c.call} owner={form.owner} />}
+                    {c.command && (
+                      <details className="mt-2" open={!c.call}>
+                        <summary className="cursor-pointer text-xs text-ink-2">{c.call ? "Or with near-cli" : "near-cli command"}</summary>
+                        <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-all rounded-lg bg-paper p-2 font-mono text-[11px]">{c.command}</pre>
+                        <button type="button" onClick={() => navigator.clipboard.writeText(c.command ?? "")} className="mt-1 text-xs text-accent">Copy</button>
+                      </details>
+                    )}
+                  </div>
                 </li>
               ))}
-            </ol>
+            </ul>
           </div>
         </section>
       )}
     </main>
+  );
+}
+
+/** Signs one checklist step with the connected NEAR wallet, if it is the owner's. */
+function WalletStep({ call, owner }: { call: { contractId: string; method: string; args: Record<string, unknown> }; owner: string }) {
+  const wallet = useNearWallet();
+  const [state, setState] = useState<{ tone: "ok" | "err" | "busy"; text: string } | null>(null);
+  const isOwner = wallet.signedAccountId === owner;
+  async function sign() {
+    setState({ tone: "busy", text: "Approve it in your wallet" });
+    try {
+      const outcome = await wallet.callFunctionRaw({ contractId: call.contractId, method: call.method, args: call.args, gas: "30000000000000", deposit: "0" });
+      const hash = txHashOf(outcome);
+      setState({ tone: "ok", text: hash ? `Signed: tx ${hash.slice(0, 10)}…` : "Signed" });
+    } catch (e) {
+      setState({ tone: "err", text: (e as Error).message });
+    }
+  }
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      <button type="button" disabled={!isOwner || state?.tone === "busy"} onClick={sign} className="press h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper transition-opacity duration-150 hover:opacity-90 disabled:opacity-40">
+        Sign with wallet
+      </button>
+      <span className={`text-xs ${state?.tone === "err" ? "text-failed" : state?.tone === "ok" ? "text-real" : "text-ink-3"}`}>
+        {state?.text ?? (wallet.signedAccountId ? (isOwner ? "" : `Connected as ${wallet.signedAccountId}; connect ${owner} to sign`) : `Connect ${owner} with the wallet button to sign`)}
+      </span>
+    </div>
   );
 }
