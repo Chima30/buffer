@@ -1,5 +1,6 @@
 "use client";
 
+import { chainName } from "@/lib/domain/chain-names";
 import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
@@ -356,10 +357,10 @@ export default function OwnerConsole() {
                         </div>
                         <dl className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-ink-3">
                           <dt>Destination</dt><dd className="break-all font-mono">{evm ? p.vendors.evm_address : p.vendors.near_account}</dd>
-                          <dt>Chain</dt><dd>{evm ? "Ethereum Sepolia (signed by NEAR Chain Signatures)" : "NEAR testnet"}</dd>
+                          <dt>Chain</dt><dd>{evm ? `${chainName(p.chain)} (signed by NEAR Chain Signatures)` : "NEAR testnet"}</dd>
                           <dt>Order</dt><dd className="font-mono">{p.orders.onchain_order_id}, purchase #{p.onchain_index}</dd>
                           <dt>Rule</dt><dd>Purchases above <Money units={data.contract.approvalAboveUnits} /> need the owner (A-1)</dd>
-                          <dt>Paid from</dt><dd>{evm ? "the contract's Ethereum treasury (you are reimbursed at settlement)" : "this order's escrow, by the contract"}</dd>
+                          <dt>Paid from</dt><dd>{evm ? `the contract's ${chainName(p.chain)} treasury (you are reimbursed at settlement)` : "this order's escrow, by the contract"}</dd>
                         </dl>
                         <div className="mt-3 flex gap-2">
                           <button disabled={!isOwner || !!busy} onClick={() => act("Approve purchase", data.contract.id, approve, args, evm ? "150000000000000" : "100000000000000")} className="rounded-md bg-ink px-3 py-1.5 text-sm font-medium text-paper disabled:opacity-40">Approve</button>

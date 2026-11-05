@@ -1,5 +1,6 @@
 "use client";
 
+import { CHAIN_NAMES } from "@/lib/domain/chain-names";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Fragment, useCallback, useEffect, useState, useSyncExternalStore } from "react";
@@ -42,7 +43,6 @@ const STAGES: { key: string; label: string; states: string[] }[] = [
   { key: "settle", label: "Settled", states: ["SETTLED"] },
 ];
 
-const CHAIN_NAMES: Record<string, string> = { near: "NEAR", sepolia: "Ethereum Sepolia", "base-sepolia": "Base Sepolia", "arbitrum-sepolia": "Arbitrum Sepolia", "op-sepolia": "OP Sepolia", "polygon-amoy": "Polygon Amoy", "avalanche-fuji": "Avalanche Fuji" };
 
 const EVENT_LABELS: Record<string, string> = {
   vendor_bids: "Vendor prices compared",
@@ -410,7 +410,7 @@ function Ledger({ entries }: { entries: OrderData["ledger"] }) {
               </div>
               {e.event_type === "payout_reimb_owner" && typeof e.details?.treasury_units === "string" && (
                 <span className="text-xs text-ink-3">
-                  {BigInt(e.details.treasury_units) > 0n && <>Ethereum treasury <Money units={e.details.treasury_units} /> · </>}
+                  {BigInt(e.details.treasury_units) > 0n && <>EVM treasury <Money units={e.details.treasury_units} /> · </>}
                   inference <Money units={String(e.details.inference_units ?? "0")} />
                 </span>
               )}

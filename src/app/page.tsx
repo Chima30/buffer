@@ -105,7 +105,7 @@ export default function Home() {
                 <span><StatusBadge status={s} /></span>
                 <span className="text-ink-2">
                   {{
-                    REAL: "Confirmed on NEAR testnet or Ethereum Sepolia, with a link",
+                    REAL: "Confirmed on NEAR testnet or an EVM testnet, with a link",
                     QUOTE: "A live NEAR Intents price. No funds moved",
                     SIMULATED: "Shown, not performed: NEAR Intents has no testnet",
                     PENDING: "Submitted, waiting for confirmation",

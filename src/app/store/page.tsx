@@ -112,7 +112,7 @@ export default function StorePage() {
                   </span>
                   <span className="mt-1 block text-sm text-ink-2">{p.description}</span>
                   <span className="mt-2 block text-xs text-ink-3">
-                    Dataset vendor paid {p.vendor.chain === "sepolia" ? "on Ethereum Sepolia through NEAR Chain Signatures" : "on NEAR by the business contract"}
+                    When data is needed, approved vendors on NEAR and six EVM testnets bid, and the cheapest total wins
                   </span>
                 </span>
               </label>
