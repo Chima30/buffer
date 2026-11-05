@@ -37,7 +37,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
     sku: (order.products as { sku: string } | null)?.sku ?? "weekly-market-brief",
     productTitle: (order.products as { title: string } | null)?.title ?? "Weekly Market Brief",
     state: order.state,
-    priceUnits: order.price_units,
+    priceUnits: String(order.price_units),
     createdAt: order.created_at,
     updatedAt: order.updated_at,
     authorised,

@@ -114,7 +114,7 @@ export function parseScope(raw: string): Scope {
   return {
     title: j.title.slice(0, 160),
     summary: typeof j.summary === "string" ? j.summary.slice(0, 400) : "",
-    sections: sections.map((a: string) => a.slice(0, 200)),
+    sections: sections.map((a: string) => a.slice(0, 400)),
     depth,
     needs_dataset: j.needs_dataset === true,
     dataset_reason: typeof j.dataset_reason === "string" ? j.dataset_reason.slice(0, 300) : "",

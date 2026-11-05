@@ -36,7 +36,7 @@ export async function GET(req: Request, ctx: RouteContext<"/api/subscriptions/[i
     state: sub.state,
     issuesTotal: sub.issues_total,
     issuesStarted: sub.issues_started,
-    issuePriceUnits: sub.issue_price_units,
+    issuePriceUnits: String(sub.issue_price_units),
     totalUnits: (BigInt(sub.issue_price_units) * BigInt(sub.issues_total)).toString(),
     escrowUnits: chain?.escrow ?? null,
     intervalSeconds: chain ? Math.round(chain.interval_ns / 1e9) : null,

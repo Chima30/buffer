@@ -226,7 +226,7 @@ function PaymentPanel({ order, token, onPaid }: { order: OrderData; token: strin
       const outcome = await wallet.callFunctionRaw({
         contractId: order.tokenContract,
         method: "ft_transfer_call",
-        args: { receiver_id: order.contractId, amount: order.priceUnits, msg: JSON.stringify({ order_id: order.onchainOrderId, sku: order.sku }) },
+        args: { receiver_id: order.contractId, amount: String(order.priceUnits), msg: JSON.stringify({ order_id: order.onchainOrderId, sku: order.sku }) },
         gas: "100000000000000",
         deposit: "1",
       });
