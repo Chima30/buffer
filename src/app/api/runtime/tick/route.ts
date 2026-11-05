@@ -7,6 +7,8 @@
 import { runDueJobs } from "@/lib/server/agent/runtime";
 import { runSubscriptions } from "@/lib/server/subscriptions";
 import { maintainTreasury } from "@/lib/server/treasury";
+import { runHealthCheck } from "@/lib/server/health";
+import { db } from "@/lib/server/db";
 import { runtimeConfig } from "@/lib/server/env";
 import { fail, json, secretMatches } from "@/lib/server/http";
 
@@ -19,5 +21,12 @@ export async function POST(req: Request) {
   const result = await runDueJobs(220_000);
   // The business pays its own gas: refill the agent if it is low (contract-capped).
   const treasury = await maintainTreasury().catch((e: Error) => ({ gas: `error: ${e.message.slice(0, 200)}` }));
-  return json({ ok: true, ...result, subscriptions, treasury });
+  // Survival engine: at most every 5 minutes (it reads seven chains).
+  let health: unknown = "checked recently";
+  const recent = await db().from("audit_logs").select("id").eq("action", "health_check").gte("at", new Date(Date.now() - 5 * 60_000).toISOString()).limit(1);
+  if (!recent.data?.length) {
+    await db().from("audit_logs").insert({ actor: "runtime", action: "health_check", details: {} });
+    health = await runHealthCheck().catch((e: Error) => ({ error: e.message.slice(0, 200) }));
+  }
+  return json({ ok: true, ...result, subscriptions, treasury, health });
 }

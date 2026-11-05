@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BookText, Boxes, Gauge, Landmark, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
+import { Activity, BookText, Boxes, Gauge, HeartPulse, Landmark, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, useState, useSyncExternalStore } from "react";
@@ -17,6 +17,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
     title: "Operate",
     items: [
       { href: "/app", label: "Owner console", icon: SlidersHorizontal },
+      { href: "/app#health", label: "Business health", icon: HeartPulse },
       { href: "/app#rules", label: "Rules", icon: Scale },
       { href: "/app#treasury", label: "Treasury", icon: Landmark },
       { href: "/app#products", label: "Products", icon: Boxes },

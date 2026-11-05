@@ -106,6 +106,18 @@ When an order needs data, the agent doesn't call one fixed vendor. It runs a com
 
 The same treasury address, one key derived by the NEAR MPC network, pays on all six EVM chains. Each chain has its own owner-set config (`set_evm_chain`: USDC address, fee cap, gas limit), its own vendor approvals (`set_evm_chain_vendor`) and its own nonce, all in the contract. The owner sets the constraints; the agent decides inside them.
 
+## Autonomous Business Survival Engine
+
+The owner console's **Health** tab answers "can this business keep going without me?" from real records only:
+
+- **Actuals:** revenue, vendor and AI costs, net margin and cost per order for the last 7 days against the 7 before.
+- **Forecast, labelled as one:** next 7 days from the 14-day average daily revenue, with a ± one standard deviation band and the assumptions written out. Under 3 paid orders in 14 days it says "not enough data" instead of guessing.
+- **Runway:** data purchases the chain treasuries can still pay at this hour's prices, and orders the agent's gas plus the gas reserve can cover (the per-order gas figure is a stated assumption).
+- **Obligations:** unstarted subscription issues, paid orders still owed a report or a refund, open quotes, purchases waiting for approval, and the refund exposure the reserve must cover.
+- **8 deterministic risk rules:** empty or low reserve, refund exposure above the reserve, stranded agent gas, a chain treasury that can't pay its vendor, AI cost per order doubling, revenue halving, margin under 20%, approvals waiting over an hour.
+- **Interventions with a hard line.** The agent acts alone only to spend *less* or to use a power the contract already grants: **lean mode** (single orders skip optional datasets while margin is under 20%; quoted orders and subscriptions keep the scope the customer paid for) and the capped gas refill. Anything that moves money or changes rules (topping up a chain, funding gas, raising a price floor, the approval threshold) is proposed for the owner to sign.
+- **Audit trail:** every risk opened or resolved and every action executed or proposed, with its evidence, the policy rule it relied on and its transaction where there is one. One live record per condition, enforced by a unique index, so re-running the check never duplicates.
+
 ## Chain Signatures (Ethereum Sepolia)
 
 The contract owns an Ethereum address derived by NEAR's MPC network (`v1.signer-prod.testnet`, path `buffer-treasury`). No one holds its private key. A cross-chain purchase works like this:

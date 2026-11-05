@@ -12,6 +12,7 @@ import { execContractCall } from "./agent/execute";
 import { recordAction } from "./agent/actions";
 import { writeLedger } from "./ledger";
 import { nearBalance } from "./near-rpc";
+import { recordHealthAction } from "./health";
 
 const YOCTO = 10n ** 24n;
 /** Ask for a refill when the agent's spendable NEAR drops below this. */
@@ -55,6 +56,7 @@ export async function maintainTreasury(): Promise<{ gas: string }> {
   const res = await execContractCall({ method: "refill_agent_gas", args: {}, idempotencyKey: key, agentAccount: ctx.agent.near_account });
   if (res.state !== "CONFIRMED") return { gas: `Refill ${res.state.toLowerCase()}${res.state === "FAILED" ? `: ${res.reason}` : ""}` };
   const ev = res.events.find((e) => e.event === "gas_refilled");
+  await recordHealthAction(ctx.business.id, "gas_refilled", "Refilled agent gas from the reserve", "The agent's gas was below 1 NEAR; the contract sent one refill within the owner's weekly cap.", { amount_yocto: String(ev?.data.amount ?? t?.gas_refill_amount) }, { txHash: res.txHash, policyVersion: ctx.policy.version });
   await writeLedger({ businessId: ctx.business.id, eventType: "gas_refilled", status: "REAL", txHash: res.txHash, verifiedOnChain: true, counterparty: ctx.agent.near_account, details: { amount_yocto: String(ev?.data.amount ?? t?.gas_refill_amount), gas_reserve_yocto: String(ev?.data.gas_reserve ?? "") } });
   return { gas: "Refilled" };
 }

@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useState, useSyncExt
 import { Money } from "@/components/money";
 import { MoneyFlow } from "@/components/money-flow";
 import { LiveDot, LivePill, Sparkline } from "@/components/live";
+import { HealthPanel } from "./health-panel";
 import { BadgeCheck, CircleDollarSign, PiggyBank, Radio } from "lucide-react";
 import { txHashOf, useNearWallet } from "@/components/wallet";
 import { sessionHeaders, signInWithWallet } from "@/lib/client/session";
@@ -82,6 +83,7 @@ const TREASURY_DEFAULTS = { reserve_bps: 1000, reserve_target: "20000000", gas_r
 
 const TABS = [
   { key: "overview", label: "Overview" },
+  { key: "health", label: "Health" },
   { key: "rules", label: "Rules" },
   { key: "treasury", label: "Treasury" },
   { key: "products", label: "Products" },
@@ -331,6 +333,8 @@ export default function OwnerConsole() {
               </div>
             </>
           )}
+
+          {tab === "health" && <HealthPanel />}
 
           <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
             <div className="contents">

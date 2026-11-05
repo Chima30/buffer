@@ -31,7 +31,9 @@ const sql =
   "\n" +
   readFileSync(new URL("./migrations/20261105010000_multichain_vendors.sql", import.meta.url), "utf8") +
   "\n" +
-  readFileSync(new URL("./migrations/20261105020000_more_chains.sql", import.meta.url), "utf8");
+  readFileSync(new URL("./migrations/20261105020000_more_chains.sql", import.meta.url), "utf8") +
+  "\n" +
+  readFileSync(new URL("./migrations/20261105030000_health_events.sql", import.meta.url), "utf8");
 
 let db: PGlite;
 let biz: string;
@@ -151,6 +153,20 @@ describe("schema", () => {
     await db.exec(`set role anon`);
     try {
       await fails(`select * from subscriptions`);
+    } finally {
+      await db.exec(`reset role`);
+    }
+  });
+
+  it("keeps one live health record per condition and hides it from anon", async () => {
+    const ins = () => db.query(`insert into health_events (business_id, kind, code, status, title) values ($1, 'risk', 'reserve_low', 'open', 'Reserve low')`, [biz]);
+    await ins();
+    await expect(ins()).rejects.toThrow();
+    await db.query(`update health_events set status = 'resolved', resolved_at = now() where code = 'reserve_low'`);
+    await ins();
+    await db.exec(`set role anon`);
+    try {
+      await fails(`select * from health_events`);
     } finally {
       await db.exec(`reset role`);
     }

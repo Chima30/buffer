@@ -19,6 +19,7 @@ import { nearConfig } from "../env";
 import { assembleSigned, broadcast, getEvmChainConfigs, getEvmPurchases, offerFees, treasury, verifyUsdcTransfer } from "../evm";
 import { chainById, chainByKey } from "../chains";
 import { runCompetition } from "../procurement";
+import { leanModeActive, recordHealthAction } from "../health";
 import { viewFunction } from "../near-rpc";
 import { audit, writeLedger } from "../ledger";
 import { deliverDataset, deliverEvmDataset } from "../vendor";
@@ -111,6 +112,16 @@ async function stepPlan(order: OrderRow, ctx: BusinessContext): Promise<StepResu
   if (order.subscription_id && plan.use_dataset) {
     plan.use_dataset = false;
     plan.dataset_reason = "Subscription issues do not buy datasets.";
+  }
+  // Survival engine lean mode: while margins are squeezed, single orders skip optional data.
+  // Spending less never needs approval; quoted orders and subscriptions are handled above.
+  if (plan.use_dataset && !order.quote && !order.subscription_id) {
+    const lean = await leanModeActive(order.business_id);
+    if (lean.active) {
+      plan.use_dataset = false;
+      plan.dataset_reason = `Lean mode: ${lean.reason ?? "margins are being protected"}. Written without buying data.`;
+      await recordHealthAction(order.business_id, "lean_skip", "Skipped an optional dataset (lean mode)", lean.reason ?? "", { order: order.onchain_order_id }, { orderId: order.id, policyVersion: ctx.policy.version });
+    }
   }
   must(await db().from("orders").update({ plan }).eq("id", order.id).select("id").single(), "save plan");
   if (plan.injection_detected) {
