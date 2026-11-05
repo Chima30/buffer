@@ -12,7 +12,7 @@ The money stays in a NEAR smart contract. The agent cannot change the owner's ru
 
 ![A settled testnet order: paid, planned, data bought on Avalanche Fuji as the cheapest of the vendors that bid, written, delivered and settled on-chain](docs/screenshots/order-settled.png)
 
-## Our first business: Verified Research Desk
+## The first business: Verified Research Desk
 
 The first business running on Buffer sells research briefs.
 
@@ -56,7 +56,7 @@ The verifier checks the payment, vendor purchases, report hash, revenue split, A
 
 Visit [/security](https://buffer-zeta.vercel.app/security).
 
-We tested seven attacks against the business, including attempts to trick the AI, pay unapproved vendors, change the owner's rules and spend too much.
+I tested seven attacks against the business, including attempts to trick the AI, pay unapproved vendors, change the owner's rules and spend too much.
 
 The page shows what happened and which security layer stopped each attempt. You can also follow the failed transactions on-chain.
 
@@ -257,7 +257,7 @@ Buffer uses several layers of protection.
 - OutLayer restricts the agent's signing permissions.
 - Chain Signatures only signs transactions built by the contract.
 
-We also tested seven attacks against the live testnet business. The security page shows the results.
+I also tested seven attacks against the live testnet business. The security page shows the results.
 
 ## How it fits the Autonomous Business track
 
@@ -277,7 +277,7 @@ We also tested seven attacks against the live testnet business. The security pag
 
 ## How to tell what actually happened
 
-We distinguish between real transactions and things that are only displayed or quoted.
+I distinguish between real transactions and things that are only displayed or quoted.
 
 | Status | Meaning |
 | --- | --- |
@@ -334,7 +334,7 @@ Buffer is still a testnet project.
 
 - No real customer funds are involved.
 - NEAR Intents settlement has not been demonstrated on mainnet.
-- We verify NEAR AI response signatures and NVIDIA GPU attestation, but do not yet verify Intel TDX quotes.
+- I verify NEAR AI response signatures and NVIDIA GPU attestation, but do not yet verify Intel TDX quotes.
 - Only one business and one agent are currently running.
 - The business creation page generates a plan but does not deploy another business.
 - Owner actions are signed through NEAR wallet or near-cli.
@@ -360,7 +360,7 @@ npm install
 
 6. Set up the business: `npm run seed`, sign the printed command to anchor the policy hash as the owner, then `npm run seed -- --activate`. `npm run m0` checks every integration.
 
-7. Deploy the app to Vercel and send a POST to `/api/runtime/tick` every minute with `Authorization: Bearer <RUNTIME_SECRET>` (we use Supabase Cron).
+7. Deploy the app to Vercel and send a POST to `/api/runtime/tick` every minute with `Authorization: Bearer <RUNTIME_SECRET>` (I use Supabase Cron).
 
 8. Open `/app` as the owner. Every feature not switched on yet (treasury rules, subscriptions, quotes, each EVM chain and its vendors) is listed with the exact transaction to sign.
 
@@ -368,7 +368,7 @@ npm install
 
 Buffer was started during the hackathon period. Its repository history begins on November 3, 2026, with `create-next-app`. There is no earlier code and no product on another chain.
 
-AI coding tools were used during development, with the project directed and reviewed by the team.
+Built solo by John Madubuike Chimaobi. AI coding tools were used during development; I directed and reviewed the work.
 
 ## License
 
