@@ -25,9 +25,9 @@ const FLOW = [
 ];
 
 const STEPS = [
-  ["Order", "A customer pays 20 USDC to the business contract, not to the agent"],
+  ["Order", "A customer pays the price (fixed, quoted or a prepaid subscription) into the business contract, not to the agent"],
   ["Plan", "The agent plans with private inference and decides whether data would help"],
-  ["Buy", "The contract pays an approved vendor, on NEAR or on Ethereum, within the owner's cap"],
+  ["Buy", "Vendors on NEAR, Ethereum, Base and Arbitrum compete; the contract pays the cheapest, within the owner's cap"],
   ["Deliver", "The report's hash is recorded on-chain, with the TEE signature behind it"],
   ["Settle", "Costs come off first, then the contract splits net revenue 70/30"],
 ] as const;
