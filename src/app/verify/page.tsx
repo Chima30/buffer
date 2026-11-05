@@ -136,7 +136,7 @@ export default function VerifyPage() {
 
       <section className="mt-10 rounded-[var(--radius-card)] border border-rule bg-surface p-5">
         <h2 className="font-medium">Don&apos;t want to trust this website?</h2>
-        <p className="mt-1 text-sm text-ink-2">This page runs the checks on our server. The same code runs on your own machine with no keys and no account:</p>
+        <p className="mt-1 text-sm text-ink-2">This page runs the checks on the Buffer server. The same code runs on your own machine with no keys and no account:</p>
         <pre className="mt-3 overflow-x-auto rounded-md bg-raised p-3 font-mono text-xs">{`git clone https://github.com/Chima30/buffer
 cd buffer && npm install
 npm run verify -- ${EXAMPLE}`}</pre>

@@ -52,7 +52,7 @@ export default function SecurityPage() {
       <p className="text-sm text-ink-3">Red team</p>
       <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">Can the agent be turned against its owner?</h1>
       <p className="mt-2 max-w-2xl text-sm text-ink-2">
-        We attack our own business the way a prompt injection or a hijacked server would. Every attack runs for real against the live
+        I attack my own business the way a prompt injection or a hijacked server would. Every attack runs for real against the live
         testnet business. Rejected transactions are real failed transactions you can open on the explorer. No funds move.
       </p>
 
