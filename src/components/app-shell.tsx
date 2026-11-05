@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BookText, Boxes, Coins, Gauge, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
+import { Activity, BookText, Boxes, Gauge, Landmark, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, useState, useSyncExternalStore } from "react";
@@ -18,7 +18,7 @@ const GROUPS: { title: string; items: Item[] }[] = [
     items: [
       { href: "/app", label: "Owner console", icon: SlidersHorizontal },
       { href: "/app#rules", label: "Rules", icon: Scale },
-      { href: "/app#money", label: "Money", icon: Coins },
+      { href: "/app#treasury", label: "Treasury", icon: Landmark },
       { href: "/app#products", label: "Products", icon: Boxes },
       { href: "/app#vendors", label: "Vendors and chains", icon: NetworkIcon },
       { href: "/app#activity", label: "Agent activity", icon: Activity },

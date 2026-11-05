@@ -83,7 +83,7 @@ const TREASURY_DEFAULTS = { reserve_bps: 1000, reserve_target: "20000000", gas_r
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "rules", label: "Rules" },
-  { key: "money", label: "Money" },
+  { key: "treasury", label: "Treasury" },
   { key: "products", label: "Products" },
   { key: "vendors", label: "Vendors" },
   { key: "activity", label: "Activity" },
@@ -97,7 +97,9 @@ const subscribeHash = (cb: () => void) => {
 };
 const useTab = (): TabKey => {
   const raw = useSyncExternalStore(subscribeHash, () => window.location.hash.slice(1), () => "");
-  return (TABS.find((t) => t.key === raw)?.key ?? "overview") as TabKey;
+  // Old links to #money land on the treasury.
+  const key = raw === "money" ? "treasury" : raw;
+  return (TABS.find((t) => t.key === key)?.key ?? "overview") as TabKey;
 };
 
 export default function OwnerConsole() {
@@ -253,7 +255,7 @@ export default function OwnerConsole() {
                   >
                     {t.label}
                     {t.key === "overview" && data.pendingApprovals.length > 0 && <span className="ml-1.5 rounded-full bg-pending-soft px-1.5 text-xs text-pending">{data.pendingApprovals.length}</span>}
-                    {t.key === "money" && data.refunds.length > 0 && <span className="ml-1.5 rounded-full bg-failed-soft px-1.5 text-xs text-failed">{data.refunds.length}</span>}
+                    {t.key === "treasury" && data.refunds.length > 0 && <span className="ml-1.5 rounded-full bg-failed-soft px-1.5 text-xs text-failed">{data.refunds.length}</span>}
                   </a>
                 </li>
               ))}
@@ -373,7 +375,7 @@ export default function OwnerConsole() {
                 )}
               </Card>
 
-              <Card tab="money" title="Recent orders">
+              <Card tab="treasury" title="Recent orders">
                 {data.orders.length === 0 ? <p className="text-sm text-ink-3">No orders yet. <Link href="/store" className="text-accent">Open the store</Link>.</p> : (
                   <ul className="divide-y divide-rule text-sm">
                     {data.orders.map((o) => (
@@ -388,7 +390,7 @@ export default function OwnerConsole() {
               </Card>
 
               {data.refunds.length > 0 && (
-                <Card tab="money" title="Refunds">
+                <Card tab="treasury" title="Refunds">
                   <p className="text-sm text-ink-2">Return a customer&apos;s payment in full. A refund stops the agent on that order. If the vendor was already paid from escrow, you top up that amount first so the customer gets all of it back.</p>
                   <ul className="mt-3 space-y-3">
                     {data.refunds.map((r) => {
@@ -501,7 +503,7 @@ export default function OwnerConsole() {
                 <PolicyBuilder onDrafted={load} ownerFetch={ownerFetch} canDraft={isOwner} />
               </Card>
 
-              <Card tab="money" title="Treasury">
+              <Card tab="treasury" first title="Self-funding treasury">
                 {!data.businessTreasury ? (
                   <p className="text-sm text-ink-3">The self-funding treasury needs the latest contract upgrade.</p>
                 ) : (
@@ -874,11 +876,11 @@ function Control({ title, state, action, danger, disabled, onClick }: { title: s
   );
 }
 
-function Card({ title, tab, wide, children }: { title: string; tab?: TabKey; wide?: boolean; children: React.ReactNode }) {
+function Card({ title, tab, wide, first, children }: { title: string; tab?: TabKey; wide?: boolean; first?: boolean; children: React.ReactNode }) {
   const active = useContext(TabContext);
   if (tab && tab !== active) return null;
   return (
-    <section className={`rounded-[var(--radius-card)] border border-rule bg-surface ${wide ? "lg:col-span-2" : ""}`}>
+    <section className={`rounded-[var(--radius-card)] border border-rule bg-surface ${wide ? "lg:col-span-2" : ""} ${first ? "order-first" : ""}`}>
       <h2 className="border-b border-rule px-5 py-3 font-medium">{title}</h2>
       <div className="p-5">{children}</div>
     </section>
