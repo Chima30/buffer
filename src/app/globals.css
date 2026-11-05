@@ -300,3 +300,14 @@ html.theme-tween * {
 @media (prefers-reduced-motion: reduce) {
   .reveal-wait { opacity: 1; transform: none; }
 }
+
+/* ---------- margins ---------- */
+/* Static dot grid, like graph paper, visible only toward the screen edges. */
+.dot-field {
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--ink) 24%, transparent) 1px, transparent 1.4px);
+  background-size: 24px 24px;
+  background-position: center top;
+  -webkit-mask-image: radial-gradient(ellipse 75% 85% at 50% 40%, transparent 45%, #000 100%);
+  mask-image: radial-gradient(ellipse 75% 85% at 50% 40%, transparent 45%, #000 100%);
+  opacity: 0.7;
+}

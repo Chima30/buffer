@@ -186,14 +186,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       )}
 
-      <div className="lg:pl-64">
+      {/* Faint graph-paper dots in the margins, fading out behind the content. Static: no motion. */}
+      <div aria-hidden className="dot-field pointer-events-none fixed inset-0 lg:left-64" />
+
+      <div className="relative lg:pl-64">
         {/* Desktop top bar: the wallet, top right, on every page. */}
         <div className="sticky top-0 z-20 hidden h-16 items-center justify-end border-b border-rule bg-paper/85 px-8 backdrop-blur lg:flex">
           <div className="w-56">
             <WalletButton />
           </div>
         </div>
-        <div className="mx-auto w-full max-w-[1240px] px-5 py-8 sm:px-8 lg:py-8">
+        <div className="mx-auto w-full max-w-[1240px] px-5 py-8 sm:px-8 lg:py-8 2xl:max-w-[1560px]">
           <ScrollReveal>{children}</ScrollReveal>
         </div>
       </div>
