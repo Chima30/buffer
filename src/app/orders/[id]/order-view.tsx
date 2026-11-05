@@ -126,6 +126,14 @@ export function OrderView() {
                     </Link>
                   </>
                 )}
+                {!["CREATED", "AWAITING_PAYMENT"].includes(order.state) && (
+                  <>
+                    {" · "}
+                    <Link href={`/verify?order=${order.onchainOrderId}`} className="text-accent">
+                      verify on-chain
+                    </Link>
+                  </>
+                )}
               </p>
               <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{order.plan?.title ?? order.productTitle ?? "Weekly Market Brief"}</h1>
             </div>

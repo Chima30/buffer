@@ -13,12 +13,12 @@ The first business is the **Verified Research Desk**. It sells short research br
 ## Check it in five minutes
 
 1. **Ledger.** Open [/ledger](https://buffer-zeta.vercel.app/ledger). Each payment, purchase and payout has a status. `REAL` rows link to the transaction on NEAR or Ethereum Sepolia.
-2. **Verify an order yourself.** This uses public chains only, with no keys and no `.env`:
+2. **Verify an order yourself.** Open [/verify](https://buffer-zeta.vercel.app/verify) and press **Try a settled cross-chain order**, or paste any order link or on-chain id (`o-…`). To avoid trusting our server, run the same code locally, with public chains only, no keys and no `.env`:
    ```
    npm install
-   npm run verify -- https://buffer-zeta.vercel.app/orders/<order-id>
+   npm run verify -- o-91336486ee60
    ```
-   It re-reads the payment, every purchase (including the Sepolia transfer and its MPC signature), the report hash, the 70/30 settlement math, the TEE signatures and NVIDIA's GPU verdict. Then it prints PASS or FAIL for each.
+   It re-reads the payment, every purchase (including EVM transfers on whichever of the six chains paid, and their MPC signatures), the report hash, the 70/30 settlement math (with a quote's own expense cap where there is one), the TEE signatures and NVIDIA's GPU verdict. Then it prints PASS or FAIL for each.
 3. **Attacks.** Open [/security](https://buffer-zeta.vercel.app/security). We ran seven attacks on our own live business: prompt injection from a customer, injection hidden in a vendor's data, paying an attacker on NEAR and on Ethereum, moving USDC directly, rewriting the rules, and overspending. The page shows which layer stopped each one. The rejected calls are real failed transactions; follow the agent's explorer link to see them.
 4. **Owner console.** Open [/app](https://buffer-zeta.vercel.app/app). It shows totals, approvals, emergency controls (pause the contract, freeze the agent's wallet), the policy and its on-chain hash, the self-funding treasury and refunds. Every owner action is a transaction the owner signs.
 5. **Start a business.** Open [/new](https://buffer-zeta.vercel.app/new). Describe a business and its rules in plain English, and get its policy, hash and launch checklist. Nothing is created for you.

@@ -8,9 +8,9 @@
  */
 import bs58 from "bs58";
 import { createRemoteJWKSet, decodeJwt, jwtVerify } from "jose";
-import { createPublicClient, decodeEventLog, erc20Abi, http, keccak256, parseTransaction, recoverMessageAddress, recoverTransactionAddress, serializeTransaction, type Hex, type TransactionSerializableEIP1559 } from "viem";
+import { createPublicClient, decodeEventLog, erc20Abi, fallback, http, keccak256, parseTransaction, recoverMessageAddress, recoverTransactionAddress, serializeTransaction, type Hex, type TransactionSerializableEIP1559 } from "viem";
 import { publicKeyToAddress } from "viem/accounts";
-import { sepolia } from "viem/chains";
+import { arbitrumSepolia, avalancheFuji, baseSepolia, optimismSepolia, polygonAmoy, sepolia, type Chain } from "viem/chains";
 import { computeSettlement, type ExpenseInput } from "../domain/revenue";
 
 export interface Check {
@@ -53,6 +53,16 @@ interface ChainOrder {
 }
 
 /** Public NEAR testnet RPC endpoints, tried in order (the first is often rate-limited). */
+/** Public RPCs for every EVM chain the treasury pays on, keyed by chain id. No keys. */
+export const EVM_CHAINS: Record<number, { name: string; chain: Chain; rpcs: string[] }> = {
+  11155111: { name: "Ethereum Sepolia", chain: sepolia, rpcs: ["https://ethereum-sepolia-rpc.publicnode.com", "https://sepolia.drpc.org"] },
+  84532: { name: "Base Sepolia", chain: baseSepolia, rpcs: ["https://sepolia.base.org", "https://base-sepolia-rpc.publicnode.com"] },
+  421614: { name: "Arbitrum Sepolia", chain: arbitrumSepolia, rpcs: ["https://sepolia-rollup.arbitrum.io/rpc", "https://arbitrum-sepolia-rpc.publicnode.com"] },
+  11155420: { name: "OP Sepolia", chain: optimismSepolia, rpcs: ["https://sepolia.optimism.io", "https://optimism-sepolia-rpc.publicnode.com"] },
+  80002: { name: "Polygon Amoy", chain: polygonAmoy, rpcs: ["https://rpc-amoy.polygon.technology", "https://polygon-amoy-bor-rpc.publicnode.com"] },
+  43113: { name: "Avalanche Fuji", chain: avalancheFuji, rpcs: ["https://api.avax-test.network/ext/bc/C/rpc", "https://avalanche-fuji-c-chain-rpc.publicnode.com"] },
+};
+
 export const NEAR_TESTNET_RPCS = ["https://rpc.testnet.near.org", "https://test.rpc.fastnear.com", "https://near-testnet.drpc.org"];
 
 async function rpc<T>(urls: string | string[], method: string, params: unknown): Promise<T> {
@@ -122,7 +132,6 @@ const sha256Hex = async (s: string) => Buffer.from(await crypto.subtle.digest("S
 
 export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
   const near = o.nearRpc ? [o.nearRpc] : NEAR_TESTNET_RPCS;
-  const sepoliaRpc = o.sepoliaRpc ?? "https://ethereum-sepolia-rpc.publicnode.com";
   const mpc = o.mpcContract ?? "v1.signer-prod.testnet";
   const checks: Check[] = [];
   const add = (group: string, name: string, ok: boolean | null, detail: string) => checks.push({ group, name, ok, detail });
@@ -153,16 +162,25 @@ export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
   for (const [i, p] of chain.purchases.entries()) add("Purchases", `NEAR purchase #${i}`, p.status !== "Sending", `${p.status}: ${p.amount} to ${p.vendor}`);
 
   // 3. Cross-chain purchases (Chain Signatures)
-  const evm = await view<{ vendor: string; amount: string; token: string; nonce: number | null; payload_hash: string | null; status: string; signature: { big_r: string; s: string; recovery_id: number } | null }[]>(near, pub.contractId, "get_evm_purchases", { order_id: pub.onchainOrderId }).catch(() => []);
+  const evm = await view<{ vendor: string; amount: string; chain_id: number; token: string; nonce: number | null; payload_hash: string | null; status: string; signature: { big_r: string; s: string; recovery_id: number } | null }[]>(near, pub.contractId, "get_evm_purchases", { order_id: pub.onchainOrderId }).catch(() => []);
   const evmSigned = evm.filter((p) => p.status === "Signed");
   if (evm.length) {
     const key = await view<string>(near, mpc, "derived_public_key", { path: "buffer-treasury", predecessor: pub.contractId, domain_id: 0 });
     const treasury = publicKeyToAddress(`0x04${Buffer.from(bs58.decode(key.split(":")[1])).toString("hex")}`);
     add("Cross-chain", "treasury address", true, `${treasury} = MPC key for (${pub.contractId}, "buffer-treasury")`);
-    const client = createPublicClient({ chain: sepolia, transport: http(sepoliaRpc) });
+    const clients = new Map<number, ReturnType<typeof createPublicClient>>();
+    const clientFor = (id: number) => {
+      const c = EVM_CHAINS[id];
+      if (!c) return null;
+      if (!clients.has(id)) {
+        const rpcs = id === 11155111 && o.sepoliaRpc ? [o.sepoliaRpc, ...c.rpcs] : c.rpcs;
+        clients.set(id, createPublicClient({ chain: c.chain, transport: fallback(rpcs.map((u) => http(u))) }));
+      }
+      return clients.get(id)!;
+    };
     for (const [i, p] of evm.entries()) {
       if (p.status !== "Signed" || !p.signature || !p.payload_hash) {
-        add("Cross-chain", `Ethereum purchase #${i}`, p.status === "Rejected" || p.status === "Failed" ? true : null, `${p.status}: nothing signed`);
+        add("Cross-chain", `EVM purchase #${i}`, p.status === "Rejected" || p.status === "Failed" ? true : null, `${p.status}: nothing signed`);
         continue;
       }
       const unsigned = await view<string | null>(near, pub.contractId, "get_evm_unsigned_tx", { order_id: pub.onchainOrderId, index: i });
@@ -174,8 +192,10 @@ export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
       const raw = serializeTransaction(tx, { r: `0x${bigR.slice(2)}`, s: `0x${p.signature.s.replace(/^0x/, "")}`, yParity: p.signature.recovery_id });
       const from = await recoverTransactionAddress({ serializedTransaction: raw as never });
       add("Cross-chain", `#${i} MPC signature`, from.toLowerCase() === treasury.toLowerCase(), `signature recovers to ${from}`);
-      const sepHash = keccak256(raw);
-      const receipt = await client.getTransactionReceipt({ hash: sepHash }).catch(() => null);
+      const net = EVM_CHAINS[p.chain_id ?? tx.chainId ?? 0];
+      const client = clientFor(p.chain_id ?? tx.chainId ?? 0);
+      const evmHash = keccak256(raw);
+      const receipt = client ? await client.getTransactionReceipt({ hash: evmHash }).catch(() => null) : null;
       const transfer = receipt?.logs.some((log) => {
         if (log.address.toLowerCase() !== p.token) return false;
         try {
@@ -185,7 +205,8 @@ export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
           return false;
         }
       });
-      add("Cross-chain", `#${i} paid on Sepolia`, receipt ? receipt.status === "success" && !!transfer : null, receipt ? `${sepHash}: ${p.amount} USDC units ${treasury} -> ${p.vendor}` : `Transaction ${sepHash} not found on Sepolia (yet)`);
+      const where = net?.name ?? `chain ${p.chain_id}`;
+      add("Cross-chain", `#${i} paid on ${where}`, receipt ? receipt.status === "success" && !!transfer : null, receipt ? `${evmHash}: ${p.amount} USDC units ${treasury} -> ${p.vendor}` : `Transaction ${evmHash} not found on ${where} (yet)`);
     }
   }
 
@@ -199,8 +220,10 @@ export async function verifyOrder(o: VerifyOptions): Promise<Check[]> {
 
   // 5. Settlement math, from on-chain numbers only
   if (["Settling", "Settled"].includes(chain.state)) {
+    // A quoted order's cap is the quote's, exactly as the contract applies it.
+    const quote = await view<{ max_expense: string } | null>(near, pub.contractId, "get_quote", { order_id: pub.onchainOrderId }).catch(() => null);
     const products = await view<[string, { max_expense: string }][]>(near, pub.contractId, "get_products");
-    const cap = products.find(([s]) => s === chain.sku)?.[1].max_expense;
+    const cap = quote?.max_expense ?? products.find(([s]) => s === chain.sku)?.[1].max_expense;
     const expenses: ExpenseInput[] = [
       ...nearPaid.map((p, i) => ({ id: `v${i}`, category: "supplier" as const, amount: BigInt(p.amount), status: "PAID" as const, evidenceRef: "onchain" })),
       ...evmSigned.map((p, i) => ({ id: `x${i}`, category: "treasury" as const, amount: BigInt(p.amount), status: "PAID" as const, evidenceRef: "onchain" })),

@@ -27,7 +27,7 @@ const FLOW = [
 const STEPS = [
   ["Order", "A customer pays the price (fixed, quoted or a prepaid subscription) into the business contract, not to the agent"],
   ["Plan", "The agent plans with private inference and decides whether data would help"],
-  ["Buy", "Vendors on NEAR and five EVM chains compete; the contract pays the cheapest, within the owner's cap"],
+  ["Buy", "Vendors on NEAR and six EVM chains compete; the contract pays the cheapest, within the owner's cap"],
   ["Deliver", "The report's hash is recorded on-chain, with the TEE signature behind it"],
   ["Settle", "Costs come off first, then the contract splits net revenue 70/30"],
 ] as const;
@@ -35,7 +35,7 @@ const STEPS = [
 const PROOF = [
   { href: "/ledger", icon: BookText, title: "Public ledger", body: "Every payment, purchase and payout, each with its transaction" },
   { href: "/security", icon: ShieldCheck, title: "7 of 7 attacks blocked", body: "Prompt injection, hijacked agent, rewritten rules, all run live" },
-  { href: "https://github.com/Chima30/buffer#check-it-in-five-minutes", icon: Terminal, title: "npm run verify", body: "Re-check any order from public chains, no keys needed" },
+  { href: "/verify", icon: Terminal, title: "Verify an order", body: "Re-check any order against the public chains, right here or with npm run verify" },
 ] as const;
 
 export default function Home() {

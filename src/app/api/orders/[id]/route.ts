@@ -1,5 +1,5 @@
 /**
- * GET /api/orders/:id?token=...  Order progress for the customer.
+ * GET /api/orders/:id?token=...  Order progress for the customer. :id may also be the on-chain id (o-…).
  * Without the token only public status is returned; the brief and report need it.
  */
 import { db, must } from "@/lib/server/db";
@@ -8,7 +8,9 @@ import { json, tokenMatches } from "@/lib/server/http";
 import { sessionFrom } from "@/lib/server/wallet-auth";
 
 export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
-  const { id } = await ctx.params;
+  const { id: ref } = await ctx.params;
+  // Accepts the order's id or its on-chain id (o-…), so `npm run verify -- o-…` works too.
+  const id = /^[0-9a-f-]{36}$/i.test(ref) ? ref : ((await db().from("orders").select("id").eq("onchain_order_id", ref).maybeSingle()).data?.id ?? ref);
   const token = new URL(req.url).searchParams.get("token");
   const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,customer_account,quote,created_at,updated_at,failure_reason,issue_number,products(sku,title),subscriptions(id,issues_total)").eq("id", id).single(), "order");
   // The private link, or a wallet session for the account that paid.

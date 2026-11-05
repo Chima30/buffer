@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BookText, Boxes, ChevronRight, Gauge, HeartPulse, Landmark, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
+import { Activity, BadgeCheck, BookText, Boxes, ChevronRight, Gauge, HeartPulse, Landmark, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, useState, useSyncExternalStore } from "react";
@@ -13,7 +13,7 @@ type Item = { href: string; label: string; icon: typeof Home };
 const GROUPS: { title: string; items: Item[] }[] = [
   { title: "Main", items: [{ href: "/", label: "Overview", icon: Home }, { href: "/new", label: "Start a business", icon: PlusSquare }] },
   { title: "Sell", items: [{ href: "/store", label: "Store", icon: ShoppingBag }, { href: "/me", label: "My orders", icon: History }] },
-  { title: "Proof", items: [{ href: "/ledger", label: "Ledger", icon: BookText }, { href: "/security", label: "Security", icon: ShieldCheck }] },
+  { title: "Proof", items: [{ href: "/ledger", label: "Ledger", icon: BookText }, { href: "/security", label: "Security", icon: ShieldCheck }, { href: "/verify", label: "Verify an order", icon: BadgeCheck }] },
   {
     title: "Operate",
     items: [
