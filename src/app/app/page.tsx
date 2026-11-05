@@ -33,7 +33,7 @@ interface Overview {
     treasuryAddress: string | null;
     policyCoversVendors: boolean;
     chains: {
-      key: string; name: string; chainId: number; configured: boolean; inPolicy: boolean; eth: string | null; usdc: string | null; explorerAddress: string | null;
+      key: string; name: string; chainId: number; gasToken: string; configured: boolean; inPolicy: boolean; eth: string | null; usdc: string | null; explorerAddress: string | null;
       vendors: { id: string; name: string; address: string | null; priceNowUnits: string; basePriceUnits: string; approvedOnChain: boolean }[];
       steps: { label: string; method: string; args: Record<string, unknown> }[];
     }[];
@@ -139,7 +139,7 @@ export default function OwnerConsole() {
     if (r.ok) setChains(await r.json());
   }, []);
   useEffect(() => {
-    if (tab !== "vendors") return;
+    if (tab !== "vendors" && tab !== "treasury") return;
     const first = setTimeout(loadChains, 0);
     const t = setInterval(loadChains, 30_000);
     return () => {
@@ -537,16 +537,7 @@ export default function OwnerConsole() {
                             </ul>
                           )}
                         </div>
-                        {data.treasury && (
-                          <div>
-                            <div className="flex items-baseline justify-between"><span className="font-medium">Ethereum treasury</span><Money units={data.treasury.usdc} /></div>
-                            <a href={data.treasury.explorerUrl} target="_blank" rel="noreferrer" className="mt-1 block break-all font-mono text-xs text-accent">{data.treasury.address} ↗</a>
-                            <p className="mt-1 text-xs text-ink-3">
-                              {(Number(BigInt(data.treasury.eth) / 10n ** 12n) / 1e6).toFixed(4)} ETH for gas. Signed only by the contract through Chain Signatures.
-                              {BigInt(t.ethereumShortfall) > 0n && <> Needs <Money units={t.ethereumShortfall} /> more for the next purchase; moving USDC from NEAR to Ethereum uses NEAR Intents, which runs on mainnet only.</>}
-                            </p>
-                          </div>
-                        )}
+                        <CrossChainTreasury chains={chains} fallback={data.treasury} />
                         <div className="space-y-1 border-t border-rule pt-3">
                           {!rulesOn && <p className="text-xs text-ink-2">Turn it on: keep 10% of your share up to 20 USDC, refill the agent 0.5 NEAR at a time, at most 2 NEAR a week.</p>}
                           <CliFallback label={rulesOn ? "Change the rules" : "Turn on the self-funding treasury"} command={cliCommand(data.contract.id, "set_treasury_rules", TREASURY_DEFAULTS, data.contract.owner, "30 Tgas")} busy={!!busy} onSubmit={(h) => recordPasted("Treasury rules", h)} />
@@ -689,7 +680,7 @@ export default function OwnerConsole() {
                               <span className={`text-xs ${c.configured && c.inPolicy ? "text-real" : "text-ink-3"}`}>{c.configured ? (c.inPolicy ? "on" : "on in the contract, not in the policy yet") : "off"}</span>
                             </div>
                             <p className="mt-0.5 text-xs text-ink-3">
-                              Treasury: {c.usdc === null ? "—" : <Money units={c.usdc} />} · {eth(c.eth)} ETH for gas
+                              Treasury: {c.usdc === null ? "—" : <Money units={c.usdc} />} · {eth(c.eth)} {c.gasToken} for gas
                               {c.explorerAddress && <> · <a href={c.explorerAddress} target="_blank" rel="noreferrer" className="text-accent">explorer ↗</a></>}
                             </p>
                             {c.vendors.map((v) => (
@@ -709,7 +700,7 @@ export default function OwnerConsole() {
                       </ul>
                       {cs.treasuryAddress && (
                         <p className="text-xs text-ink-3">
-                          Fund the treasury <span className="break-all font-mono">{cs.treasuryAddress}</span> on each chain: test USDC from faucet.circle.com, and a little test ETH for gas from a Base or Arbitrum Sepolia faucet. A chain the treasury cannot pay on is skipped, never failed.
+                          Fund the treasury <span className="break-all font-mono">{cs.treasuryAddress}</span> on each chain: test USDC from faucet.circle.com, and a little of that chain&apos;s gas token (Sepolia ETH, POL on Amoy, AVAX on Fuji) from its faucet. A chain the treasury cannot pay on is skipped, never failed.
                         </p>
                       )}
                     </div>
@@ -837,6 +828,61 @@ function CliFallback({ label, command, busy, onSubmit }: { label: string; comman
   );
 }
 
+
+/** One MPC-derived address pays on every EVM chain: its USDC and gas, chain by chain. */
+function CrossChainTreasury({ chains, fallback }: { chains: Overview["chainsSetup"] | null; fallback: Overview["treasury"] }) {
+  if (!chains) {
+    return fallback ? (
+      <div className="space-y-2">
+        <div className="flex items-baseline justify-between"><span className="font-medium">Cross-chain treasury</span><span className="text-xs text-ink-3">reading chains…</span></div>
+        <div className="skeleton h-24" />
+      </div>
+    ) : null;
+  }
+  const gas = (w: string | null) => (w === null ? "—" : (Number(BigInt(w) / 10n ** 12n) / 1e6).toFixed(4));
+  const total = chains.chains.reduce((a, c) => a + BigInt(c.usdc ?? "0"), 0n);
+  const live = chains.chains.filter((c) => c.configured && c.usdc !== null && BigInt(c.usdc) > 0n && c.eth !== null && BigInt(c.eth) > 0n);
+  return (
+    <div>
+      <div className="flex items-baseline justify-between">
+        <span className="font-medium">Cross-chain treasury</span>
+        <Money units={total.toString()} />
+      </div>
+      <p className="mt-0.5 text-xs text-ink-3">
+        One address on every EVM chain, signed only by the contract through Chain Signatures · {live.length} of {chains.chains.length} chains ready
+      </p>
+      {chains.treasuryAddress && <p className="mt-1 break-all font-mono text-[11px] text-ink-3">{chains.treasuryAddress}</p>}
+      <table className="mt-3 w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-[0.06em] text-ink-3">
+            <th className="pb-1.5 font-medium">Chain</th>
+            <th className="pb-1.5 text-right font-medium">USDC</th>
+            <th className="pb-1.5 text-right font-medium">Gas</th>
+            <th className="pb-1.5 text-right font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-rule">
+          {chains.chains.map((c) => {
+            const funded = c.usdc !== null && BigInt(c.usdc) > 0n && c.eth !== null && BigInt(c.eth) > 0n;
+            const tone = !c.configured ? "off" : funded ? "live" : "warn";
+            return (
+              <tr key={c.key}>
+                <td className="py-2">
+                  {c.explorerAddress ? <a href={c.explorerAddress} target="_blank" rel="noreferrer" className="hover:text-accent">{c.name} ↗</a> : c.name}
+                </td>
+                <td className="py-2 text-right">{c.usdc === null ? "—" : <Money units={c.usdc} />}</td>
+                <td className="py-2 text-right font-mono text-xs tabular">{gas(c.eth)} <span className="text-ink-3">{c.gasToken}</span></td>
+                <td className="py-2 text-right">
+                  <LivePill tone={tone}>{!c.configured ? "Off" : funded ? "Live" : "Needs funding"}</LivePill>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 function Kpi({ icon: Icon, label, value, foot, spark, progress, glow }: { icon: typeof Radio; label: string; value: React.ReactNode; foot: React.ReactNode; spark?: number[]; progress?: number | null; glow?: boolean }) {
   return (

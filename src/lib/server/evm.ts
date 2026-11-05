@@ -97,8 +97,12 @@ export async function getEvmVendorApprovals(): Promise<Map<number, Set<string>>>
 /** Current fees on a chain, clamped to the owner's cap stored in the contract. */
 export async function offerFees(capWei: bigint, chainId = 11155111): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
   const f = await clientFor(chainId).estimateFeesPerGas();
-  const maxFeePerGas = (f.maxFeePerGas * 2n < capWei ? f.maxFeePerGas * 2n : capWei) || 1n;
-  const tip = f.maxPriorityFeePerGas ?? 1_000_000_000n;
+  const minTip = chainById(chainId).minTipWei ?? 0n;
+  let tip = f.maxPriorityFeePerGas ?? 1_000_000_000n;
+  if (tip < minTip) tip = minTip;
+  let want = f.maxFeePerGas * 2n;
+  if (want < tip * 2n) want = tip * 2n;
+  const maxFeePerGas = (want < capWei ? want : capWei) || 1n;
   return { maxFeePerGas, maxPriorityFeePerGas: tip < maxFeePerGas ? tip : maxFeePerGas };
 }
 
@@ -168,7 +172,7 @@ export async function treasuryBalances(chainId = 11155111): Promise<{ address: s
 }
 
 /** Treasury balances on every known EVM chain; a chain whose RPC fails is reported as null. */
-export async function treasuryBalancesAll(): Promise<{ chain: EvmChainInfo; eth: bigint; usdc: bigint } [] > {
+export async function treasuryBalancesAll(): Promise<{ chain: EvmChainInfo; eth: bigint; usdc: bigint }[]> {
   const rows = await Promise.all(evmChains().map(async (chain) => {
     const b = await treasuryBalances(chain.chainId).catch(() => null);
     return b ? { chain, eth: b.eth, usdc: b.usdc } : null;

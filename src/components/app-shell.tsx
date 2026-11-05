@@ -104,7 +104,7 @@ function Network() {
   return (
     <div className="flex items-center gap-2 font-mono text-[11px] text-ink-3">
       <Gauge size={12} strokeWidth={1.6} />
-      NEAR testnet + 3 EVM testnets
+      NEAR testnet + 6 EVM testnets
     </div>
   );
 }

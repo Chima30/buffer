@@ -155,7 +155,7 @@ async function stepProcure(order: OrderRow, ctx: BusinessContext): Promise<StepR
       status: "QUOTE",
       amountUnits: comp.winner ? BigInt(comp.winner.totalUnits) : null,
       counterparty: comp.winner ? `${comp.winner.vendor} (${comp.winner.chainName})` : null,
-      details: { bids: comp.bids, winner: comp.winner?.vendorId ?? null, eth_usd: comp.ethUsd, eth_usd_source: comp.ethUsdSource, hour: comp.hour },
+      details: { bids: comp.bids, winner: comp.winner?.vendorId ?? null, eth_usd: comp.ethUsd, eth_usd_source: comp.ethUsdSource, gas_prices: comp.gasPrices, hour: comp.hour },
     });
     if (!comp.winner) {
       await transition(order, "DRAFTING", "no vendor could sell within the owner's limits; drafting without dataset");

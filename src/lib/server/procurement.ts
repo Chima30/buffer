@@ -14,7 +14,7 @@ import { encodeFunctionData, erc20Abi, type Hex } from "viem";
 import { evaluate } from "@/lib/domain/policy/evaluate";
 import type { BusinessContext, VendorRow } from "./business";
 import { evaluationContext } from "./business";
-import { chainByKey } from "./chains";
+import { chainByKey, type GasToken } from "./chains";
 import { viewFunction } from "./near-rpc";
 import { nearConfig } from "./env";
 import { clientFor, getEvmChainConfigs, getEvmVendorApprovals, offerFees, treasury, treasuryBalances, type OnchainEvmConfig } from "./evm";
@@ -39,6 +39,8 @@ export interface Competition {
   winner: Bid | null;
   ethUsd: number;
   ethUsdSource: string;
+  /** Every gas token used in the bids, with its price and source. */
+  gasPrices: { token: GasToken; usd: number; source: string }[];
   hour: string;
 }
 
@@ -58,10 +60,13 @@ export function vendorPrice(vendor: { id: string; unit_price_units: string }, at
   return ((raw + 50_000n) / 100_000n) * 100_000n;
 }
 
-let ethCache: { usd: number; at: number; source: string } | null = null;
+const PYTH_IDS: Partial<Record<GasToken, string>> = { ETH: "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace" };
+const FALLBACK_USD: Record<GasToken, number> = { ETH: 3000, POL: 0.25, AVAX: 25 };
+const priceCache = new Map<GasToken, { usd: number; at: number; source: string }>();
 
-async function fromPyth(): Promise<number> {
-  const id = "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace";
+async function fromPyth(token: GasToken): Promise<number> {
+  const id = PYTH_IDS[token];
+  if (!id) throw new Error("no feed");
   const res = await fetch(`https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=${id}&parsed=true`, { signal: AbortSignal.timeout(8000), cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const j = (await res.json()) as { parsed?: { price: { price: string; expo: number } }[] };
@@ -71,8 +76,8 @@ async function fromPyth(): Promise<number> {
   return usd;
 }
 
-async function fromCoinbase(): Promise<number> {
-  const res = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", { signal: AbortSignal.timeout(8000), cache: "no-store" });
+async function fromCoinbase(token: GasToken): Promise<number> {
+  const res = await fetch(`https://api.coinbase.com/v2/prices/${token}-USD/spot`, { signal: AbortSignal.timeout(8000), cache: "no-store" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const j = (await res.json()) as { data?: { amount?: string } };
   const usd = Number(j.data?.amount);
@@ -80,22 +85,28 @@ async function fromCoinbase(): Promise<number> {
   return usd;
 }
 
-/** ETH/USD to value testnet gas as if it were real: Pyth first, then Coinbase, then a labelled fallback. */
-export async function ethUsd(): Promise<{ usd: number; source: string }> {
-  if (ethCache && Date.now() - ethCache.at < 5 * 60_000) return ethCache;
+/** USD price of a gas token, to value testnet gas as if it were real: Pyth, then Coinbase, then a labelled fallback. */
+export async function gasTokenUsd(token: GasToken): Promise<{ usd: number; source: string }> {
+  const hit = priceCache.get(token);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit;
   const errors: string[] = [];
-  for (const [name, get] of [["Pyth ETH/USD", fromPyth], ["Coinbase ETH-USD", fromCoinbase]] as const) {
+  for (const [name, get] of [["Pyth", fromPyth], ["Coinbase", fromCoinbase]] as const) {
     try {
-      ethCache = { usd: await get(), at: Date.now(), source: name };
-      return ethCache;
+      const v = { usd: await get(token), at: Date.now(), source: `${name} ${token}/USD` };
+      priceCache.set(token, v);
+      return v;
     } catch (e) {
-      errors.push(`${name.split(" ")[0]}: ${(e as Error).message.slice(0, 40)}`);
+      errors.push(`${name}: ${(e as Error).message.slice(0, 40)}`);
     }
   }
-  // Do not cache the fallback for long: try the feeds again on the next order.
-  ethCache = { usd: 3000, at: Date.now() - 4 * 60_000, source: `fallback 3000 USD (${errors.join("; ")})` };
-  return ethCache;
+  // Short-lived: the feeds are tried again on the next order.
+  const v = { usd: FALLBACK_USD[token], at: Date.now() - 4 * 60_000, source: `fallback ${FALLBACK_USD[token]} USD (${errors.join("; ")})` };
+  priceCache.set(token, v);
+  return v;
 }
+
+/** Kept for callers that only need ETH. */
+export const ethUsd = () => gasTokenUsd("ETH");
 
 const weiToUsdcUnits = (wei: bigint, usd: number) => (wei * BigInt(Math.round(usd * 1e6))) / 10n ** 18n;
 
@@ -111,14 +122,17 @@ async function transferGas(cfg: OnchainEvmConfig, to: string, amount: bigint, fr
 
 export async function runCompetition(ctx: BusinessContext, orderId: string, capLeftUnits: bigint): Promise<Competition> {
   const now = new Date();
-  const [configs, approvals, nearVendors, eth, from, evalCtx] = await Promise.all([
+  const tokens = [...new Set(ctx.vendors.map((v) => chainByKey(v.chain)?.gasToken).filter((t): t is GasToken => !!t))];
+  const [configs, approvals, nearVendors, from, evalCtx, ...prices] = await Promise.all([
     getEvmChainConfigs(),
     getEvmVendorApprovals(),
     viewFunction<[string, boolean][]>(nearConfig().contractId, "get_vendors").catch(() => [] as [string, boolean][]),
-    ethUsd(),
     treasury(),
     evaluationContext(ctx),
+    ...tokens.map((t) => gasTokenUsd(t)),
   ]);
+  const priceOf = new Map(tokens.map((t, i) => [t, prices[i]]));
+  const eth = priceOf.get("ETH") ?? (await gasTokenUsd("ETH"));
   const nearApproved = new Set(nearVendors.filter(([, ok]) => ok).map(([a]) => a));
 
   const bids = await Promise.all(
@@ -158,9 +172,9 @@ export async function runCompetition(ctx: BusinessContext, orderId: string, capL
       try {
         const [fees, bal, gas] = await Promise.all([offerFees(BigInt(cfg.max_fee_per_gas_cap), chain.chainId), treasuryBalances(chain.chainId), transferGas(cfg, base.address, price, from)]);
         if (!bal || bal.usdc < price) return skip(`Treasury holds ${bal ? Number(bal.usdc) / 1e6 : 0} USDC on ${chain.name}`);
-        if (bal.eth < BigInt(cfg.gas_limit) * fees.maxFeePerGas) return skip(`Treasury has too little ETH for gas on ${chain.name}`);
+        if (bal.eth < BigInt(cfg.gas_limit) * fees.maxFeePerGas) return skip(`Treasury has too little ${chain.gasToken} for gas on ${chain.name}`);
         // Expected cost: estimated gas at the offered fee (an upper bound for EIP-1559).
-        const gasUnits = weiToUsdcUnits(gas * fees.maxFeePerGas, eth.usd);
+        const gasUnits = weiToUsdcUnits(gas * fees.maxFeePerGas, (priceOf.get(chain.gasToken) ?? eth).usd);
         return { ...base, gasUnits: gasUnits.toString(), totalUnits: (price + gasUnits).toString(), needsApproval: d.outcome === "needs_approval" };
       } catch (e) {
         return skip(`${chain.name} could not be reached: ${(e as Error).message.slice(0, 80)}`);
@@ -182,6 +196,7 @@ export async function runCompetition(ctx: BusinessContext, orderId: string, capL
     winner,
     ethUsd: eth.usd,
     ethUsdSource: eth.source,
+    gasPrices: tokens.map((t) => ({ token: t, usd: priceOf.get(t)!.usd, source: priceOf.get(t)!.source })),
     hour: now.toISOString().slice(0, 13) + ":00Z",
   };
 }

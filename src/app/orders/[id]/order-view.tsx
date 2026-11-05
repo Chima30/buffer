@@ -42,7 +42,7 @@ const STAGES: { key: string; label: string; states: string[] }[] = [
   { key: "settle", label: "Settled", states: ["SETTLED"] },
 ];
 
-const CHAIN_NAMES: Record<string, string> = { near: "NEAR", sepolia: "Ethereum Sepolia", "base-sepolia": "Base Sepolia", "arbitrum-sepolia": "Arbitrum Sepolia" };
+const CHAIN_NAMES: Record<string, string> = { near: "NEAR", sepolia: "Ethereum Sepolia", "base-sepolia": "Base Sepolia", "arbitrum-sepolia": "Arbitrum Sepolia", "op-sepolia": "OP Sepolia", "polygon-amoy": "Polygon Amoy", "avalanche-fuji": "Avalanche Fuji" };
 
 const EVENT_LABELS: Record<string, string> = {
   vendor_bids: "Vendor prices compared",
@@ -381,7 +381,7 @@ function Bids({ entries }: { entries: OrderData["ledger"] }) {
           </li>
         ))}
       </ul>
-      <p className="mt-3 text-xs text-ink-3">Prices for {String(e.details.hour ?? "this hour")}. Gas valued at {Number(e.details.eth_usd ?? 0).toFixed(0)} USD/ETH ({String(e.details.eth_usd_source ?? "")}). The cheapest total within the owner&apos;s limits wins; code decides, not the AI.</p>
+      <p className="mt-3 text-xs text-ink-3">Prices for {String(e.details.hour ?? "this hour")}. Gas valued at {Array.isArray(e.details.gas_prices) ? (e.details.gas_prices as { token: string; usd: number; source: string }[]).map((g) => `${g.token} ${g.usd < 10 ? g.usd.toFixed(3) : g.usd.toFixed(0)} USD (${g.source})`).join(", ") : `${Number(e.details.eth_usd ?? 0).toFixed(0)} USD/ETH (${String(e.details.eth_usd_source ?? "")})`}. The cheapest total within the owner&apos;s limits wins; code decides, not the AI.</p>
     </Card>
   );
 }

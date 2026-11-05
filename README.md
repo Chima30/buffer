@@ -99,12 +99,12 @@ A customer can describe any research request in their own words and get a price 
 
 When an order needs data, the agent doesn't call one fixed vendor. It runs a competition:
 
-- **Every approved vendor bids:** the NEAR vendor and vendors on Ethereum Sepolia, Base Sepolia and Arbitrum Sepolia. Demo vendors publish an hourly price list (within ±15% of their base price, deterministic, so anyone can recompute it).
-- **Real total cost.** For an EVM vendor the agent adds that chain's live gas for the USDC transfer, valued in USDC with the Pyth ETH/USD price. NEAR purchases are paid from the order's escrow with no extra gas.
+- **Every approved vendor bids:** the NEAR vendor and vendors on Ethereum Sepolia, Base Sepolia, Arbitrum Sepolia, OP Sepolia, Polygon Amoy and Avalanche Fuji. Demo vendors publish an hourly price list (within ±15% of their base price, deterministic, so anyone can recompute it).
+- **Real total cost.** For an EVM vendor the agent adds that chain's live gas for the USDC transfer, valued in USDC at the gas token's price (ETH, POL or AVAX, from Pyth or Coinbase). NEAR purchases are paid from the order's escrow with no extra gas.
 - **Only bids the owner's rules allow.** A bid is skipped if the vendor or chain isn't approved in the policy or the contract, if it's above what the order may still spend, or if the treasury can't pay on that chain (not enough USDC or gas). Skipped, never failed.
 - **Code picks the winner:** the cheapest total, ties to NEAR. The AI only decided that a dataset is needed. The order page shows every bid, the winner, and why the others lost.
 
-The same treasury address, one key derived by the NEAR MPC network, pays on all three EVM chains. Each chain has its own owner-set config (`set_evm_chain`: USDC address, fee cap, gas limit), its own vendor approvals (`set_evm_chain_vendor`) and its own nonce, all in the contract. The owner sets the constraints; the agent decides inside them.
+The same treasury address, one key derived by the NEAR MPC network, pays on all six EVM chains. Each chain has its own owner-set config (`set_evm_chain`: USDC address, fee cap, gas limit), its own vendor approvals (`set_evm_chain_vendor`) and its own nonce, all in the contract. The owner sets the constraints; the agent decides inside them.
 
 ## Chain Signatures (Ethereum Sepolia)
 

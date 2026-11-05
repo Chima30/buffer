@@ -31,7 +31,7 @@ export async function deliverDataset(onchainOrderId: string, purchaseIndex: numb
 }
 
 /**
- * Demo vendors on EVM testnets (Ethereum, Base, Arbitrum Sepolia). Payment is a REAL USDC transfer on that chain from the
+ * Demo vendors on EVM testnets (Ethereum, Base, Arbitrum, OP Sepolia, Polygon Amoy, Avalanche Fuji). Payment is a REAL USDC transfer on that chain from the
  * Buffer treasury (signed by NEAR Chain Signatures); the dataset is a small static
  * pack written for this demo and labelled as such.
  */
