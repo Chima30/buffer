@@ -12,7 +12,7 @@ The first business is the **Verified Research Desk**. It sells short research br
 
 ## Check it in five minutes
 
-1. **Ledger.** Open [/ledger](https://buffer-zeta.vercel.app/ledger). Each payment, purchase and payout has a status. `REAL` rows link to the transaction on NEAR or Ethereum Sepolia.
+1. **Ledger.** Open [/ledger](https://buffer-zeta.vercel.app/ledger). Each payment, purchase and payout has a status. `REAL` rows link to the transaction on NEAR or on the EVM testnet that paid.
 2. **Verify an order yourself.** Open [/verify](https://buffer-zeta.vercel.app/verify) and press **Try a settled cross-chain order**, or paste any order link or on-chain id (`o-…`). To avoid trusting our server, run the same code locally, with public chains only, no keys and no `.env`:
    ```
    npm install
@@ -35,6 +35,22 @@ You need a NEAR testnet wallet (for example Meteor) holding a little testnet NEA
 5. Check it independently: `npm run verify -- <the order URL>`.
 
 To see a refund instead: start a subscription with 3 issues, wait for issue #1 to start, then press **Cancel and refund**. The contract returns the unstarted issues' money to you.
+
+## How it fits the Autonomous Business track
+
+| Track brief | Where it is in Buffer |
+| --- | --- |
+| Humans only set the constraints | One policy (spending caps, daily AI budget, minimum prices, vendor allowlist, approval threshold, split) whose hash the owner anchors in the contract. The agent refuses to act on any other version. `src/lib/domain/policy/`, `set_policy_hash` in `contract/src/lib.rs` |
+| Kill switch | The owner pauses the contract (`pause`) or freezes the agent's OutLayer wallet. Owner console, Overview |
+| Treasury | Business reserve, refunds from the reserve, capped agent gas refills, one Chain Signatures treasury on six EVM testnets. `set_treasury_rules`, `src/lib/server/treasury.ts` |
+| Sales | Fixed-price briefs, prepaid subscriptions and custom quotes, all paid into contract escrow. `/store`, `subscriptions.ts`, `quotes.ts` |
+| Procurement | Vendors on NEAR and six EVM chains bid on each purchase; code picks the cheapest allowed total. `src/lib/server/procurement.ts` |
+| Cross-chain payments | Chain Signatures: the contract builds and the NEAR MPC network signs each EVM payment. NEAR Intents has no testnet (rule Q-007), so Intents appears only as live dry-run quotes. `contract/src/evm.rs`, `src/lib/server/evm.ts`, `oneclick.ts` |
+| Revenue sharing | The contract pays 70% to the owner and 30% to the contributor at settlement, after costs. `settle` in `contract/src/lib.rs`, mirrored in `src/lib/domain/revenue.ts` |
+| Agent has its own account, no plaintext full-access key | OutLayer custody; the key lives in a TEE and its policy allows calls to one contract only. `src/lib/server/outlayer.ts`, `scripts/outlayer-policy.ts` |
+| Inference from NEAR AI Cloud | Private TEE models, signatures checked, GPUs attested with NVIDIA. `nearai.ts`, `nras.ts` |
+| Public ledger | Every sale, cost and payout, with its status and transaction. `/ledger` |
+| Keeps itself alive | Survival Engine: margin, runway, obligations, 8 risk rules, lean mode, owner proposals. Owner console, Business health |
 
 ## What one order does
 
@@ -215,8 +231,9 @@ near contract call-function as-read-only buffer-john-desk.testnet get_order json
 Every commit is from the hackathon window: the repository starts on 2026-11-03 with `create-next-app`. There is no earlier code and no product on another chain.
 
 Libraries and tools:
-- **Contract:** `near-sdk` (Rust), plus `near-sandbox` and `cargo-near` in tests.
-- **App:** Next.js, React, Tailwind CSS, Supabase (`@supabase/supabase-js`), `zod`, `viem` (Ethereum transactions and signature recovery), `jose` (NVIDIA token verification), `bs58`, `react-markdown`, `geist` fonts.
+- **Contract:** `near-sdk` (Rust); in tests `near-sandbox`, `near-api`, `cargo-near-build` and `tokio`.
+- **App:** Next.js, React, Tailwind CSS, Supabase (`@supabase/supabase-js`), `zod`, `viem` (EVM transactions and signature recovery), `jose` (NVIDIA token verification), `bs58`, `react-markdown`, `lucide-react` icons, `geist` fonts.
+- **Scripts:** `tsx` and `dotenv`.
 - **NEAR:** `near-api-js`, `@hot-labs/near-connect` and `near-connect-hooks` (wallet), `@outlayer/sdk` (agent custody).
 - **Tests:** `vitest` and PGlite (an in-memory Postgres for the schema tests).
 
