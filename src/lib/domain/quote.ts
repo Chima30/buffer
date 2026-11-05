@@ -20,7 +20,8 @@ export const AI_ESTIMATE_UNITS: Record<Depth, bigint> = { brief: 20_000n, standa
 export const AI_ALLOWANCE_UNITS = USDC;
 /** Report length by depth, for the writer. */
 export const DEPTH_WORDS: Record<Depth, string> = { brief: "450-700", standard: "800-1100", deep: "1200-1600" };
-export const DEPTH_TOKENS: Record<Depth, number> = { brief: 1600, standard: 2600, deep: 3600 };
+/** Reply allowance by depth. The model reasons before writing, so it needs far more than the report's length. */
+export const DEPTH_TOKENS: Record<Depth, number> = { brief: 4000, standard: 6000, deep: 8000 };
 
 export interface QuoteRulesUnits {
   minUnits: bigint;

@@ -371,7 +371,8 @@ async function stepDraft(order: OrderRow, ctx: BusinessContext, attempt = 1): Pr
     orderId: order.id,
     purpose: "draft",
     messages: draftMessages(order.brief, order.plan ?? { title: ctx.product.title, angles: [] }, dataset, order.quote ? DEPTH_WORDS[order.quote.depth] : undefined),
-    maxTokens: order.quote ? DEPTH_TOKENS[order.quote.depth] : 1600,
+    // Each retry gets 50% more room: a long-reasoning reply must be able to finish.
+    maxTokens: Math.min(12_000, Math.round((order.quote ? DEPTH_TOKENS[order.quote.depth] : 3000) * (1 + 0.5 * Math.max(0, attempt - 1)))),
     // A retry must really ask again: reusing the stored answer would return the same bad draft.
     idempotencyKey: attempt <= 1 ? `${order.id}:draft` : `${order.id}:draft:r${attempt}`,
   });
