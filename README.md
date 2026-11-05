@@ -10,6 +10,8 @@ The AI agent handles the day-to-day work. It receives orders, finds the data it 
 
 The money stays in a NEAR smart contract. The agent cannot change the owner's rules or spend outside the limits.
 
+![A settled testnet order: paid, planned, data bought on Avalanche Fuji as the cheapest of the vendors that bid, written, delivered and settled on-chain](docs/screenshots/order-settled.png)
+
 ## Our first business: Verified Research Desk
 
 The first business running on Buffer sells research briefs.
@@ -38,6 +40,8 @@ You'll see payments, vendor purchases and payouts, along with their status. Rows
 **2. Verify an order**
 
 Open [/verify](https://buffer-zeta.vercel.app/verify) and select **Try a settled cross-chain order**, or enter an order link or ID.
+
+<img src="docs/screenshots/verify.png" width="560" alt="Verify page for order o-3438af14498a: 16 checks passed and 0 failed against NEAR testnet, Avalanche Fuji and the NEAR MPC network">
 
 You can also verify an order yourself from the terminal:
 
@@ -159,6 +163,8 @@ Buffer includes a self-funding treasury.
 
 Only the owner can change treasury rules or withdraw reserve funds.
 
+![Owner console, Treasury tab: business reserve, agent gas, and one Chain Signatures treasury address live on six EVM testnets with its USDC and gas on each](docs/screenshots/treasury.png)
+
 ## Subscriptions
 
 Customers can prepay for several research briefs at once.
@@ -171,6 +177,8 @@ Customers can prepay for several research briefs at once.
 - Customers can cancel at any time and receive a refund for issues that haven't started.
 
 The schedule is adjustable. Testnet uses shorter intervals so the subscription can be demonstrated more quickly.
+
+![A cancelled subscription: the customer paid 30 USDC for three issues, cancelled after the first started, and the contract refunded the 20 USDC for the two unstarted issues](docs/screenshots/subscription-cancelled.png)
 
 ## Custom quotes
 
@@ -204,6 +212,8 @@ The system considers the vendor's price and the cost of gas on that chain.
 A vendor is skipped if it isn't approved, costs too much or the treasury cannot afford the purchase.
 
 Code chooses the cheapest eligible offer. If two offers cost the same, NEAR wins.
+
+<img src="docs/screenshots/vendor-bids.png" width="420" alt="Vendor bids on a real order: six EVM vendors priced with live gas, Avalanche Fuji cheapest at 7.90 USDC and bought, the NEAR vendor skipped for exceeding the order's remaining budget">
 
 The same Chain Signatures-derived treasury address is used across the six EVM testnets. NEAR's MPC network signs the transactions.
 
