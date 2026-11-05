@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
 import { useNearWallet } from "@/components/wallet";
 import { sessionHeaders, setSession, signInWithWallet, useLocalHistory, useSession } from "@/lib/client/session";
@@ -32,7 +32,11 @@ const DONE = new Set(["DELIVERED", "SETTLING", "SETTLED", "COMPLETED"]);
 
 const day = (iso: string) => new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
+const noop = () => () => {};
+
 export default function MyOrdersPage() {
+  // The session lives in this browser's storage, so wait for it before drawing anything: no sign-in card flashing first.
+  const hydrated = useSyncExternalStore(noop, () => true, () => false);
   const wallet = useNearWallet();
   const session = useSession();
   const local = useLocalHistory();
@@ -50,7 +54,8 @@ export default function MyOrdersPage() {
     }
     const j = await res.json();
     if (!res.ok) return setError(j.error ?? "Could not load your orders");
-    setMine(j);
+    // Polls that change nothing don't re-render the lists.
+    setMine((prev) => (prev && JSON.stringify(prev) === JSON.stringify(j) ? prev : j));
   }, [session]);
 
   useEffect(() => {
@@ -75,9 +80,30 @@ export default function MyOrdersPage() {
     }
   }
 
+  // A different account connected in the wallet than the one signed in here.
+  const otherWallet = !!session && !!wallet.signedAccountId && wallet.signedAccountId !== session.accountId;
+  const loadingLists = !!session && !mine;
+
+  async function switchAccount() {
+    setSession(null);
+    setMine(null);
+    await signIn();
+  }
+
   const singles = mine?.orders.filter((o) => !o.subscriptionId) ?? [];
   const known = new Set([...(mine?.orders.map((o) => o.id) ?? []), ...(mine?.subscriptions.map((s) => s.id) ?? [])]);
-  const browserOnly = local.filter((i) => !known.has(i.id));
+  // Only once the account's own lists are in, so rows don't appear and then vanish.
+  const browserOnly = !session || mine ? local.filter((i) => !known.has(i.id)) : [];
+
+  if (!hydrated) {
+    return (
+      <main>
+        <p className="text-sm text-ink-3">My orders</p>
+        <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">Your briefs and subscriptions</h1>
+        <ListsSkeleton />
+      </main>
+    );
+  }
 
   return (
     <main className="enter">
@@ -105,6 +131,19 @@ export default function MyOrdersPage() {
           </button>
         </div>
       )}
+
+      {otherWallet && (
+        <div className="mt-4 flex max-w-[40rem] flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-rule bg-pending-soft px-4 py-3 text-sm">
+          <span className="text-ink-2">
+            Your wallet is connected as <span className="font-mono">{wallet.signedAccountId}</span>, but this list is for <span className="font-mono">{session?.accountId}</span>.
+          </span>
+          <button type="button" onClick={switchAccount} disabled={busy} className="press font-medium text-accent disabled:opacity-60">
+            {busy ? "Waiting for your wallet…" : `Show ${wallet.signedAccountId}'s orders`}
+          </button>
+        </div>
+      )}
+
+      {loadingLists && <ListsSkeleton />}
 
       {session && mine && (
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
@@ -134,6 +173,31 @@ export default function MyOrdersPage() {
   );
 }
 
+function ListsSkeleton() {
+  return (
+    <div className="mt-8 grid gap-6 lg:grid-cols-2" aria-busy="true" aria-label="Loading your orders">
+      {[0, 1].map((k) => (
+        <section key={k} className="rounded-[var(--radius-card)] border border-rule bg-surface">
+          <div className="border-b border-rule px-5 py-3">
+            <div className="skeleton h-5 w-28" />
+          </div>
+          <ul className="divide-y divide-rule">
+            {[0, 1, 2].map((i) => (
+              <li key={i} className="flex items-center justify-between gap-4 px-5 py-3.5">
+                <div className="flex-1 space-y-2">
+                  <div className="skeleton h-4 w-4/5" />
+                  <div className="skeleton h-3 w-2/5" />
+                </div>
+                <div className="skeleton h-4 w-16" />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 function List({ title, note, empty, children }: { title: string; note?: string; empty: string; children: React.ReactNode[] }) {
   return (
     <section className="rounded-[var(--radius-card)] border border-rule bg-surface">
@@ -141,7 +205,7 @@ function List({ title, note, empty, children }: { title: string; note?: string; 
         <h2 className="font-medium">{title}</h2>
         {note && <p className="mt-0.5 text-xs text-ink-3">{note}</p>}
       </div>
-      {children.length === 0 ? <p className="p-5 text-sm text-ink-3">{empty}</p> : <ul className="divide-y divide-rule">{children}</ul>}
+      {children.length === 0 ? <p className="p-5 text-sm text-ink-3">{empty}</p> : <ul className="stagger divide-y divide-rule">{children}</ul>}
     </section>
   );
 }

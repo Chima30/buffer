@@ -276,3 +276,27 @@ html.theme-tween * {
     transition: none !important;
   }
 }
+
+/* ---------- scroll reveal ---------- */
+/* Below-the-fold blocks wait a little lower and transparent, then rise as they arrive. */
+.reveal-wait {
+  opacity: 0;
+  transform: translateY(18px);
+}
+.reveal-in {
+  opacity: 1;
+  transform: none;
+  transition: opacity 560ms var(--ease), transform 640ms var(--ease);
+}
+/* Bars, chart lines and staggered tiles inside a waiting block hold their animation until it arrives. */
+.reveal-wait .grow,
+.reveal-wait .draw,
+.reveal-wait .flow-reveal,
+.reveal-wait .flow-label,
+.reveal-wait .stagger > *,
+.reveal-wait.stagger > * {
+  animation-play-state: paused;
+}
+@media (prefers-reduced-motion: reduce) {
+  .reveal-wait { opacity: 1; transform: none; }
+}

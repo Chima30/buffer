@@ -4,6 +4,7 @@ import { Activity, BookText, Boxes, ChevronRight, Gauge, HeartPulse, Landmark, H
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, useState, useSyncExternalStore } from "react";
+import { ScrollReveal } from "./scroll-reveal";
 import { SystemStatus } from "./system-status";
 import { ThemeSwitch } from "./theme-toggle";
 import { WalletButton } from "./wallet";
@@ -192,7 +193,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <WalletButton />
           </div>
         </div>
-        <div className="mx-auto w-full max-w-[1240px] px-5 py-8 sm:px-8 lg:py-8">{children}</div>
+        <div className="mx-auto w-full max-w-[1240px] px-5 py-8 sm:px-8 lg:py-8">
+          <ScrollReveal>{children}</ScrollReveal>
+        </div>
       </div>
     </div>
   );
