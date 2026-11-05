@@ -214,12 +214,12 @@ export default function OwnerConsole() {
 
   return (
     <main className="enter">
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <p className="text-sm text-ink-3">Owner console</p>
-          <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{data?.business?.name ?? "Business"}</h1>
-        </div>
+      <div>
+        <p className="text-sm text-ink-3">Owner console</p>
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
+          <h1 className="text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{data?.business?.name ?? "Business"}</h1>
         {data && <LivePill tone={!data.contract.paused && data.agent?.status === "running" ? "live" : "warn"}>{!data.contract.paused && data.agent?.status === "running" ? "Live on NEAR testnet" : data.contract.paused ? "Paused" : `Agent ${data.agent?.status}`}</LivePill>}
+        </div>
       </div>
 
       {!wallet.signedAccountId && <Banner tone="simulated">Anyone can view this console; only the owner can act. Every change is a transaction the contract accepts from the owner account alone. Connect the owner wallet to act.</Banner>}
@@ -411,7 +411,7 @@ export default function OwnerConsole() {
                 </Card>
               )}
 
-              <Card tab="activity" title="Agent decisions">
+              <Card tab="activity" wide title="Agent decisions">
                 <ul className="divide-y divide-rule text-sm">
                   {data.recentActions.map((a, i) => (
                     <li key={i} className="py-2">
@@ -463,7 +463,7 @@ export default function OwnerConsole() {
                 )}
               </Card>
 
-              <Card tab="rules" title="Policy">
+              <Card tab="rules" wide title="Policy">
                 <p className="text-sm">
                   Version {data.contract.policyVersion}{" "}
                   {data.policyAnchored ? <span className="text-real">● matches the on-chain anchor</span> : <span className="text-failed">✕ does not match the on-chain anchor: the agent will not act</span>}
@@ -659,7 +659,7 @@ export default function OwnerConsole() {
                 </Card>
               )}
 
-              <Card tab="vendors" title="Vendors and chains">
+              <Card tab="vendors" wide title="Vendors and chains">
                 {(() => {
                   const cs = chains;
                   if (!cs) return <p className="text-sm text-ink-3">Reading the chains…</p>;
@@ -874,11 +874,11 @@ function Control({ title, state, action, danger, disabled, onClick }: { title: s
   );
 }
 
-function Card({ title, tab, children }: { title: string; tab?: TabKey; children: React.ReactNode }) {
+function Card({ title, tab, wide, children }: { title: string; tab?: TabKey; wide?: boolean; children: React.ReactNode }) {
   const active = useContext(TabContext);
   if (tab && tab !== active) return null;
   return (
-    <section className="rounded-[var(--radius-card)] border border-rule bg-surface">
+    <section className={`rounded-[var(--radius-card)] border border-rule bg-surface ${wide ? "lg:col-span-2" : ""}`}>
       <h2 className="border-b border-rule px-5 py-3 font-medium">{title}</h2>
       <div className="p-5">{children}</div>
     </section>

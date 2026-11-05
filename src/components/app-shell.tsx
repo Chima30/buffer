@@ -70,16 +70,26 @@ function NavList({ path, hash, onNavigate }: { path: string | null; hash: string
               if (sub && path !== "/app") return null;
               return (
                 <li key={href}>
-                  <Link
-                    href={href}
-                    onClick={onNavigate}
-                    aria-current={on ? "page" : undefined}
-                    className={`group relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors duration-150 ${sub ? "pl-7" : ""} ${on ? "bg-accent-soft text-accent" : "text-ink-2 hover:bg-raised hover:text-ink"}`}
-                  >
-                    <span aria-hidden className={`absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent transition-transform duration-300 ${on ? "scale-y-100" : "scale-y-0"}`} />
-                    <Icon size={sub ? 14 : 16} strokeWidth={1.6} className={on ? "text-accent" : "text-ink-3 group-hover:text-ink-2"} />
-                    {label}
-                  </Link>
+                  {(() => {
+                    const cls = `group relative flex h-8 items-center gap-2.5 rounded-lg px-2.5 text-sm transition-colors duration-150 ${sub ? "pl-7" : ""} ${on ? "bg-accent-soft text-accent" : "text-ink-2 hover:bg-raised hover:text-ink"}`;
+                    const inner = (
+                      <>
+                        <span aria-hidden className={`absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent transition-transform duration-300 ${on ? "scale-y-100" : "scale-y-0"}`} />
+                        <Icon size={sub ? 14 : 16} strokeWidth={1.6} className={on ? "text-accent" : "text-ink-3 group-hover:text-ink-2"} />
+                        {label}
+                      </>
+                    );
+                    // Console sections are plain hash links: the browser fires hashchange, which the console's tabs follow.
+                    return sub ? (
+                      <a href={href.slice(href.indexOf("#"))} onClick={onNavigate} aria-current={on ? "page" : undefined} className={cls}>
+                        {inner}
+                      </a>
+                    ) : (
+                      <Link href={href} onClick={onNavigate} aria-current={on ? "page" : undefined} className={cls}>
+                        {inner}
+                      </Link>
+                    );
+                  })()}
                 </li>
               );
             })}
