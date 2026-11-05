@@ -10,7 +10,7 @@ import { sessionFrom } from "@/lib/server/wallet-auth";
 export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
   const { id } = await ctx.params;
   const token = new URL(req.url).searchParams.get("token");
-  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,customer_account,created_at,updated_at,failure_reason,issue_number,products(sku,title),subscriptions(id,issues_total)").eq("id", id).single(), "order");
+  const order = must(await db().from("orders").select("id,state,price_units,onchain_order_id,brief,plan,access_token_hash,customer_account,quote,created_at,updated_at,failure_reason,issue_number,products(sku,title),subscriptions(id,issues_total)").eq("id", id).single(), "order");
   // The private link, or a wallet session for the account that paid.
   const authorised = tokenMatches(token, order.access_token_hash) || (!!order.customer_account && (await sessionFrom(req)) === order.customer_account);
 
@@ -41,6 +41,13 @@ export async function GET(req: Request, ctx: RouteContext<"/api/orders/[id]">) {
     createdAt: order.created_at,
     updatedAt: order.updated_at,
     authorised,
+    // Price, expiry and breakdown are public like the price; the scope is the customer's.
+    quote: order.quote
+      ? (() => {
+          const q = order.quote as { summary: string; sections: string[]; depth: string; needs_dataset: boolean; breakdown: Record<string, string>; max_expense_units: string; expires_at: string; quote_tx: string | null; clamped: string | null };
+          return { depth: q.depth, needsDataset: q.needs_dataset, breakdown: q.breakdown, maxExpenseUnits: q.max_expense_units, expiresAt: q.expires_at, quoteTx: q.quote_tx, clamped: q.clamped, summary: authorised ? q.summary : null, sections: authorised ? q.sections : null };
+        })()
+      : null,
     subscription: order.subscriptions ? { id: (order.subscriptions as { id: string }).id, issue: order.issue_number, of: (order.subscriptions as { issues_total: number }).issues_total } : null,
     brief: authorised ? order.brief : null,
     plan: authorised ? order.plan : null,

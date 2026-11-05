@@ -7,7 +7,7 @@
  *           evm_purchase_approved / _signed / _rejected, evm_config_set, evm_vendor_set, evm_nonce_set,
  *           refund_topped_up, refund_started, leg_confirmed (refund leg), order_refunded,
  *           treasury_rules_set, gas_reserve_funded, gas_reserve_withdrawn, reserve_withdrawn,
- *           product_set, subscription_plan_set, subscription_cancelled (+ subscription_refunded)
+ *           product_set, subscription_plan_set, quote_rules_set, subscription_cancelled (+ subscription_refunded)
  *   near-outlayer: WalletFrozenChanged for this agent's wallet
  * Anyone may submit a hash; a hash only ever proves what the owner already did.
  */
@@ -79,7 +79,7 @@ export async function POST(req: Request) {
       // NEAR amounts stay in details: amount_units on the ledger is always USDC.
       await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
       recorded.push(e.event);
-    } else if (e.event === "product_set" || e.event === "subscription_plan_set") {
+    } else if (e.event === "product_set" || e.event === "subscription_plan_set" || e.event === "quote_rules_set") {
       await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
       recorded.push(e.event);
     } else if (e.event === "subscription_cancelled") {

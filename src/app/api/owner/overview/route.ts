@@ -5,7 +5,7 @@
  * a wallet-signed transaction, so this route grants no admin power.
  */
 import { connection } from "next/server";
-import { getConfig, getSubscriptionPlans, getTreasury } from "@/lib/server/contract";
+import { getConfig, getQuoteRules, getSubscriptionPlans, getTreasury } from "@/lib/server/contract";
 import { viewFunction } from "@/lib/server/near-rpc";
 import { editableValues } from "@/lib/domain/policy/draft";
 import type { PolicyDocument } from "@/lib/domain/policy/schema";
@@ -124,6 +124,28 @@ async function overview() {
       }
     : null;
 
+  // Custom quotes: the owner's limits in the contract and what is still to switch on.
+  const [ruleList, quoteProduct] = await Promise.all([getQuoteRules(), db().from("products").select("sku,title,price_units,max_expense_units").eq("kind", "quote").limit(1).maybeSingle()]);
+  const qp = quoteProduct.data;
+  const qProductOnchain = qp ? chainProducts.find(([sku]) => sku === qp.sku)?.[1] : undefined;
+  const qRules = qp ? (ruleList ?? []).find(([sku]) => sku === qp.sku)?.[1] : undefined;
+  const QUOTE_RULES = qp ? { sku: qp.sku, min_price: "5000000", max_price: "50000000", max_expense_bps: 6000, max_ttl_ns: 1_800_000_000_000, active: true } : null;
+  const quoteSetup = qp
+    ? {
+        sku: qp.sku,
+        title: qp.title,
+        contractSupports: ruleList !== null,
+        policyAllows: !!activeDoc && activeDoc.rules.pricing.min_price_units[qp.sku] !== undefined,
+        rules: qRules ?? null,
+        steps: [
+          ...(!qProductOnchain || !qProductOnchain.active
+            ? [{ label: `List ${qp.title}`, method: "set_product", args: { sku: qp.sku, price: String(qp.price_units), max_expense: String(qp.max_expense_units), active: true } }]
+            : []),
+          ...(!qRules?.active ? [{ label: "Switch on quotes: 5 to 50 USDC, expenses at most 60% of the price, open 30 minutes", method: "set_quote_rules", args: QUOTE_RULES! }] : []),
+        ],
+      }
+    : null;
+
   // Low balances that would stall the business during judging.
   const YOCTO = 10n ** 24n;
   const alerts: string[] = [];
@@ -164,6 +186,7 @@ async function overview() {
       reserveKept: paid("reserve"),
     },
     subscriptionSetup,
+    quoteSetup,
     subscriptions: subs.data ?? [],
     pendingApprovals: pending.data ?? [],
     orders: orders.data ?? [],

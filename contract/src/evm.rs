@@ -111,16 +111,43 @@ mod tests {
     const VENDOR: &str = "0x00000000000000000000000000000000000000aa";
 
     fn tx(nonce: u64, prio: u128, fee: u128) -> Erc20Transfer {
-        Erc20Transfer { chain_id: 11155111, nonce, max_priority_fee_per_gas: prio, max_fee_per_gas: fee, gas_limit: 100_000, token: parse_address(USDC).unwrap(), to: parse_address(VENDOR).unwrap(), amount: 12_000_000 }
+        Erc20Transfer {
+            chain_id: 11155111,
+            nonce,
+            max_priority_fee_per_gas: prio,
+            max_fee_per_gas: fee,
+            gas_limit: 100_000,
+            token: parse_address(USDC).unwrap(),
+            to: parse_address(VENDOR).unwrap(),
+            amount: 12_000_000,
+        }
     }
 
     // Expected values produced by viem serializeTransaction / keccak256.
     #[test]
     fn matches_viem_vectors() {
         let cases = [
-            (0, 1_000_000_000, 30_000_000_000, "02f87183aa36a780843b9aca008506fc23ac00830186a0941c7d4b196cb0c7b01d743fbc6116a902379c723880b844a9059cbb00000000000000000000000000000000000000000000000000000000000000aa0000000000000000000000000000000000000000000000000000000000b71b00c0", "71f556309451a20381752b4e152c7eb1625ef48967c06977969393933b6f7714"),
-            (7, 0, 1, "02f86883aa36a7078001830186a0941c7d4b196cb0c7b01d743fbc6116a902379c723880b844a9059cbb00000000000000000000000000000000000000000000000000000000000000aa0000000000000000000000000000000000000000000000000000000000b71b00c0", "62f810ab25c4e4cd4147dc10db5dca6d72f6e7ecc3aace04ce6035294814c76b"),
-            (300, 1_500_000_000, 200_000_000_000, "02f87383aa36a782012c8459682f00852e90edd000830186a0941c7d4b196cb0c7b01d743fbc6116a902379c723880b844a9059cbb00000000000000000000000000000000000000000000000000000000000000aa0000000000000000000000000000000000000000000000000000000000b71b00c0", "9026d3baf3cb9f4d9979d69855a9058dfaed49ad5726ed0ca49b2811bf0694ac"),
+            (
+                0,
+                1_000_000_000,
+                30_000_000_000,
+                "02f87183aa36a780843b9aca008506fc23ac00830186a0941c7d4b196cb0c7b01d743fbc6116a902379c723880b844a9059cbb00000000000000000000000000000000000000000000000000000000000000aa0000000000000000000000000000000000000000000000000000000000b71b00c0",
+                "71f556309451a20381752b4e152c7eb1625ef48967c06977969393933b6f7714",
+            ),
+            (
+                7,
+                0,
+                1,
+                "02f86883aa36a7078001830186a0941c7d4b196cb0c7b01d743fbc6116a902379c723880b844a9059cbb00000000000000000000000000000000000000000000000000000000000000aa0000000000000000000000000000000000000000000000000000000000b71b00c0",
+                "62f810ab25c4e4cd4147dc10db5dca6d72f6e7ecc3aace04ce6035294814c76b",
+            ),
+            (
+                300,
+                1_500_000_000,
+                200_000_000_000,
+                "02f87383aa36a782012c8459682f00852e90edd000830186a0941c7d4b196cb0c7b01d743fbc6116a902379c723880b844a9059cbb00000000000000000000000000000000000000000000000000000000000000aa0000000000000000000000000000000000000000000000000000000000b71b00c0",
+                "9026d3baf3cb9f4d9979d69855a9058dfaed49ad5726ed0ca49b2811bf0694ac",
+            ),
         ];
         for (nonce, prio, fee, bytes, hash) in cases {
             let b = unsigned_eip1559(&tx(nonce, prio, fee));
@@ -131,7 +158,10 @@ mod tests {
 
     #[test]
     fn parses_addresses() {
-        assert_eq!(address_string(&parse_address(USDC).unwrap()), USDC.to_lowercase());
+        assert_eq!(
+            address_string(&parse_address(USDC).unwrap()),
+            USDC.to_lowercase()
+        );
         assert!(parse_address("0x123").is_none());
         assert!(parse_address("1c7D4B196Cb0C7B01d743Fbc6116a902379C7238").is_none());
         assert!(parse_address("0xzz7D4B196Cb0C7B01d743Fbc6116a902379C7238").is_none());

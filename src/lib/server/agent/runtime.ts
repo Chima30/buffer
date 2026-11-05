@@ -24,6 +24,8 @@ import { recordAction } from "./actions";
 import { execContractCall } from "./execute";
 import { PolicyDenied, runInference } from "./inference";
 import { draftMessages, parsePlan, planMessages, type Plan } from "./prompts";
+import { DEPTH_TOKENS, DEPTH_WORDS } from "@/lib/domain/quote";
+import type { OrderQuote } from "../quotes";
 
 export type Step = "plan" | "procure" | "await_purchase" | "draft" | "deliver" | "settle" | "retry_legs";
 
@@ -37,6 +39,7 @@ interface OrderRow {
   product_id: string;
   plan: Plan | null;
   subscription_id: string | null;
+  quote: OrderQuote | null;
 }
 
 type StepResult = { next?: Step; delaySec?: number; repeat?: boolean };
@@ -44,7 +47,7 @@ type StepResult = { next?: Step; delaySec?: number; repeat?: boolean };
 // ---------- helpers ----------
 
 export async function loadOrder(id: string): Promise<OrderRow> {
-  return must(await db().from("orders").select("id,business_id,state,brief,price_units,onchain_order_id,product_id,plan,subscription_id").eq("id", id).single(), "order");
+  return must(await db().from("orders").select("id,business_id,state,brief,price_units,onchain_order_id,product_id,plan,subscription_id,quote").eq("id", id).single(), "order");
 }
 
 export async function transition(order: OrderRow, to: OrderState, reason: string): Promise<void> {
@@ -77,6 +80,15 @@ async function notifyOwner(businessId: string, type: string, payload: Record<str
 
 async function stepPlan(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
   if (order.state === "PAID") await transition(order, "PLANNING", "agent picked up paid order");
+  // A quoted order already has the scope the customer accepted and paid for.
+  if (order.quote && order.plan) {
+    if (order.plan.use_dataset) {
+      await transition(order, "PROCURING", "accepted quote includes a dataset");
+      return { next: "procure" };
+    }
+    await transition(order, "DRAFTING", "accepted quote: no dataset");
+    return { next: "draft" };
+  }
   const evalCtx = await evaluationContext(ctx);
   const out = await runInference({
     ctx,
@@ -310,8 +322,8 @@ async function stepDraft(order: OrderRow, ctx: BusinessContext): Promise<StepRes
     evalCtx: await evaluationContext(ctx),
     orderId: order.id,
     purpose: "draft",
-    messages: draftMessages(order.brief, order.plan ?? { title: ctx.product.title, angles: [] }, dataset),
-    maxTokens: 1600,
+    messages: draftMessages(order.brief, order.plan ?? { title: ctx.product.title, angles: [] }, dataset, order.quote ? DEPTH_WORDS[order.quote.depth] : undefined),
+    maxTokens: order.quote ? DEPTH_TOKENS[order.quote.depth] : 1600,
     idempotencyKey: `${order.id}:draft`,
   });
   const content = out.content.trim();
@@ -358,7 +370,7 @@ async function stepSettle(order: OrderRow, ctx: BusinessContext, attempt: number
   ];
   // Off-chain preview with the same formula the contract runs; used for reconciliation.
   const t = onchain.state === "Fulfilled" ? await getTreasury() : null;
-  const preview = computeSettlement({ gross: BigInt(onchain.gross), maxExpense: BigInt(ctx.product.max_expense_units), contributorBps: ctx.contributorBps, expenses, reserve: t ? { bps: t.reserve_bps, target: BigInt(t.reserve_target), balance: BigInt(t.reserve_balance) } : undefined });
+  const preview = computeSettlement({ gross: BigInt(onchain.gross), maxExpense: BigInt(order.quote?.max_expense_units ?? ctx.product.max_expense_units), contributorBps: ctx.contributorBps, expenses, reserve: t ? { bps: t.reserve_bps, target: BigInt(t.reserve_target), balance: BigInt(t.reserve_balance) } : undefined });
 
   if (onchain.state === "Fulfilled") {
     if (order.state === "DELIVERED") await transition(order, "SETTLING", "settlement requested");

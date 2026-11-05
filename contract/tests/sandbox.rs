@@ -6,9 +6,16 @@
 use near_api::{AccountId, NearToken};
 use near_sdk::serde_json::{Value, json};
 
-async fn create_account(sandbox: &near_sandbox::Sandbox, name: &str) -> testresult::TestResult<near_api::Account> {
+async fn create_account(
+    sandbox: &near_sandbox::Sandbox,
+    name: &str,
+) -> testresult::TestResult<near_api::Account> {
     let id: AccountId = name.parse()?;
-    sandbox.create_account(id.clone()).initial_balance(NearToken::from_near(10)).send().await?;
+    sandbox
+        .create_account(id.clone())
+        .initial_balance(NearToken::from_near(10))
+        .send()
+        .await?;
     Ok(near_api::Account(id))
 }
 
@@ -17,11 +24,15 @@ async fn deploys_and_enforces_owner_only_config() -> testresult::TestResult<()> 
     let wasm = std::fs::read(cargo_near_build::build_with_cli(Default::default())?)?;
     let sandbox = near_sandbox::Sandbox::start_sandbox().await?;
     let net = near_api::NetworkConfig::from_rpc_url("sandbox", sandbox.rpc_addr.parse()?);
-    let signer = near_api::Signer::from_secret_key(near_sandbox::config::DEFAULT_GENESIS_ACCOUNT_PRIVATE_KEY.parse()?)?;
+    let signer = near_api::Signer::from_secret_key(
+        near_sandbox::config::DEFAULT_GENESIS_ACCOUNT_PRIVATE_KEY.parse()?,
+    )?;
 
     let owner = create_account(&sandbox, "owner.sandbox").await?;
     let agent = create_account(&sandbox, "agent.sandbox").await?;
-    let contract = create_account(&sandbox, "desk.sandbox").await?.as_contract();
+    let contract = create_account(&sandbox, "desk.sandbox")
+        .await?
+        .as_contract();
 
     near_api::Contract::deploy(contract.account_id().clone())
         .use_code(wasm)
@@ -60,7 +71,12 @@ async fn deploys_and_enforces_owner_only_config() -> testresult::TestResult<()> 
         .await?
         .assert_failure();
 
-    let config: Value = contract.call_function("get_config", ()).read_only().fetch_from(&net).await?.data;
+    let config: Value = contract
+        .call_function("get_config", ())
+        .read_only()
+        .fetch_from(&net)
+        .await?
+        .data;
     assert_eq!(config["contributor_bps"], 3000);
     assert_eq!(config["contributor"], "contrib.sandbox");
     assert_eq!(config["paused"], false);

@@ -25,7 +25,9 @@ const sql =
   "\n" +
   readFileSync(new URL("./migrations/20261104050000_treasury.sql", import.meta.url), "utf8") +
   "\n" +
-  readFileSync(new URL("./migrations/20261104060000_subscriptions.sql", import.meta.url), "utf8");
+  readFileSync(new URL("./migrations/20261104060000_subscriptions.sql", import.meta.url), "utf8") +
+  "\n" +
+  readFileSync(new URL("./migrations/20261105000000_quotes.sql", import.meta.url), "utf8");
 
 let db: PGlite;
 let biz: string;

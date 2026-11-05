@@ -43,6 +43,12 @@
 //! issue's price into a new ordinary order for the same customer, which then
 //! follows every rule above. The customer or owner can cancel at any time; the
 //! unstarted issues are refunded to the customer in full.
+//!
+//! Quotes: for a quoted product the agent registers a price for one order
+//! (`create_quote`) and the customer pays exactly that before it expires. The
+//! contract refuses any quote outside the owner's rules: price within
+//! [min_price, max_price], and an expense cap of at most `max_expense_bps` of the
+//! price. That per-order cap replaces the product's cap everywhere above.
 
 pub mod evm;
 
@@ -103,6 +109,9 @@ enum StorageKey {
     // Appended in the subscriptions upgrade.
     SubscriptionPlans,
     Subscriptions,
+    // Appended in the quotes upgrade.
+    QuoteRules,
+    Quotes,
 }
 
 #[near(serializers = [json, borsh])]
@@ -392,6 +401,31 @@ struct SubscribeMsg {
     issues: u32,
 }
 
+/// The owner's limits on prices the agent may quote for a product.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuoteRules {
+    pub min_price: U128,
+    pub max_price: U128,
+    /// Largest expense cap a quote may carry, as a share of its price.
+    pub max_expense_bps: u16,
+    /// Longest a quote may stay open, in nanoseconds.
+    pub max_ttl_ns: u64,
+    pub active: bool,
+}
+
+/// One price for one order, registered by the agent within the owner's rules.
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Debug, PartialEq)]
+pub struct Quote {
+    pub sku: String,
+    pub amount: U128,
+    pub max_expense: U128,
+    pub created_ns: u64,
+    pub expires_ns: u64,
+    pub paid: bool,
+}
+
 /// How a product may be sold as a subscription. Set by the owner.
 #[near(serializers = [json, borsh])]
 #[derive(Clone, Debug, PartialEq)]
@@ -463,6 +497,9 @@ pub struct Contract {
     // ---- subscriptions upgrade (appended; see `migrate`) ----
     subscription_plans: IterableMap<String, SubscriptionPlan>,
     subscriptions: LookupMap<String, Subscription>,
+    // ---- quotes upgrade (appended; see `migrate`) ----
+    quote_rules: IterableMap<String, QuoteRules>,
+    quotes: LookupMap<String, Quote>,
 }
 
 /// Self-funding treasury state and the owner's rules for it.
@@ -485,9 +522,9 @@ pub struct Treasury {
     pub gas_spent_week: U128,
 }
 
-/// State layout before the subscriptions upgrade, read once by `migrate`.
+/// State layout before the quotes upgrade, read once by `migrate`.
 #[near(serializers = [borsh])]
-pub(crate) struct ContractV3 {
+pub(crate) struct ContractV4 {
     owner: AccountId,
     agent: AccountId,
     token_id: AccountId,
@@ -507,6 +544,8 @@ pub(crate) struct ContractV3 {
     evm_purchases: LookupMap<String, Vec<EvmPurchase>>,
     evm_nonce: u64,
     treasury: Treasury,
+    subscription_plans: IterableMap<String, SubscriptionPlan>,
+    subscriptions: LookupMap<String, Subscription>,
 }
 
 fn emit(event: &str, data: serde_json::Value) {
@@ -560,18 +599,20 @@ impl Contract {
             treasury: Treasury::default(),
             subscription_plans: IterableMap::new(StorageKey::SubscriptionPlans),
             subscriptions: LookupMap::new(StorageKey::Subscriptions),
+            quote_rules: IterableMap::new(StorageKey::QuoteRules),
+            quotes: LookupMap::new(StorageKey::Quotes),
         };
         c.assert_config_valid();
         c
     }
 
-    /// One-time upgrade from the treasury layout. Keeps every existing field,
-    /// order, purchase, settlement and the treasury; adds empty subscriptions.
+    /// One-time upgrade from the subscriptions layout. Keeps every existing field,
+    /// order, purchase, settlement, the treasury and subscriptions; adds empty quotes.
     #[private]
     #[init(ignore_state)]
     pub fn migrate() -> Self {
-        let old: ContractV3 = env::state_read().expect("no prior state");
-        emit("migrated", serde_json::json!({ "to": "subscriptions" }));
+        let old: ContractV4 = env::state_read().expect("no prior state");
+        emit("migrated", serde_json::json!({ "to": "quotes" }));
         Self {
             owner: old.owner,
             agent: old.agent,
@@ -592,8 +633,10 @@ impl Contract {
             evm_purchases: old.evm_purchases,
             evm_nonce: old.evm_nonce,
             treasury: old.treasury,
-            subscription_plans: IterableMap::new(StorageKey::SubscriptionPlans),
-            subscriptions: LookupMap::new(StorageKey::Subscriptions),
+            subscription_plans: old.subscription_plans,
+            subscriptions: old.subscriptions,
+            quote_rules: IterableMap::new(StorageKey::QuoteRules),
+            quotes: LookupMap::new(StorageKey::Quotes),
         }
     }
 
@@ -693,6 +736,47 @@ impl Contract {
         emit(
             "subscription_plan_set",
             serde_json::json!({ "sku": sku, "interval_ns": interval_ns, "min_issues": min_issues, "max_issues": max_issues, "active": active }),
+        );
+    }
+
+    /// Lets the agent quote `sku` per order within these limits. `active: false`
+    /// switches quoting off; the product then sells at its listed price again.
+    pub fn set_quote_rules(
+        &mut self,
+        sku: String,
+        min_price: U128,
+        max_price: U128,
+        max_expense_bps: u16,
+        max_ttl_ns: u64,
+        active: bool,
+    ) {
+        self.assert_owner();
+        require!(self.products.contains_key(&sku), "unknown product");
+        require!(
+            min_price.0 > 0 && min_price.0 <= max_price.0,
+            "bad price range"
+        );
+        require!(
+            max_expense_bps as u128 <= BPS_DENOMINATOR,
+            "max_expense_bps out of range"
+        );
+        require!(max_ttl_ns > 0, "ttl must be positive");
+        self.quote_rules.insert(
+            sku.clone(),
+            QuoteRules {
+                min_price,
+                max_price,
+                max_expense_bps,
+                max_ttl_ns,
+                active,
+            },
+        );
+        emit(
+            "quote_rules_set",
+            serde_json::json!({
+                "sku": sku, "min_price": min_price, "max_price": max_price,
+                "max_expense_bps": max_expense_bps, "max_ttl_ns": max_ttl_ns, "active": active,
+            }),
         );
     }
 
@@ -957,13 +1041,44 @@ impl Contract {
             Some(p) if p.active => p.clone(),
             _ => return reject("unknown_sku"),
         };
-        if amount.0 != product.price.0 {
+        let now = env::block_timestamp();
+        // A quoted product is sold only at the price the agent quoted for this order.
+        let quote = self.quotes.get(&parsed.order_id).cloned();
+        let price = match &quote {
+            Some(q) => {
+                if q.sku != parsed.sku {
+                    return reject("wrong_sku");
+                }
+                if q.paid {
+                    return reject("duplicate_order");
+                }
+                if now > q.expires_ns {
+                    return reject("quote_expired");
+                }
+                q.amount.0
+            }
+            None => {
+                if self
+                    .quote_rules
+                    .get(&parsed.sku)
+                    .map(|r| r.active)
+                    .unwrap_or(false)
+                {
+                    return reject("quote_required");
+                }
+                product.price.0
+            }
+        };
+        if amount.0 != price {
             return reject("wrong_amount");
         }
         if self.orders.contains_key(&parsed.order_id) {
             return reject("duplicate_order");
         }
-        let now = env::block_timestamp();
+        if let Some(mut q) = quote {
+            q.paid = true;
+            self.quotes.insert(parsed.order_id.clone(), q);
+        }
         self.orders.insert(
             parsed.order_id.clone(),
             Order {
@@ -1015,13 +1130,9 @@ impl Contract {
             "order is not in Paid state"
         );
         require!(order.purchases.len() < MAX_PURCHASES, "too many purchases");
-        let product = self
-            .products
-            .get(&order.sku)
-            .expect("product missing")
-            .clone();
         require!(
-            self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0,
+            self.committed_spend(&order_id, &order) + amount.0
+                <= self.expense_cap(&order_id, &order),
             "purchase exceeds the order's expense cap"
         );
 
@@ -1184,13 +1295,9 @@ impl Contract {
             order.purchases.len() + list.len() < MAX_PURCHASES,
             "too many purchases"
         );
-        let product = self
-            .products
-            .get(&order.sku)
-            .expect("product missing")
-            .clone();
         require!(
-            self.committed_spend(&order_id, &order) + amount.0 <= product.max_expense.0,
+            self.committed_spend(&order_id, &order) + amount.0
+                <= self.expense_cap(&order_id, &order),
             "purchase exceeds the order's expense cap"
         );
 
@@ -1391,11 +1498,6 @@ impl Contract {
             order.state == OrderState::Fulfilled,
             "order is not in Fulfilled state"
         );
-        let product = self
-            .products
-            .get(&order.sku)
-            .expect("product missing")
-            .clone();
         let inference: u128 = claims
             .iter()
             .map(|c| c.amount.0)
@@ -1405,7 +1507,7 @@ impl Contract {
         let reimbursable = inference.checked_add(evm_paid).expect("claim overflow");
         let split = compute_split(
             order.gross.0,
-            product.max_expense.0,
+            self.expense_cap(&order_id, &order),
             self.contributor_bps,
             order.vendor_paid(),
             reimbursable,
@@ -1612,6 +1714,68 @@ impl Contract {
         self.orders.insert(order_id, order);
     }
 
+    // ---------- quotes ----------
+
+    /// Agent registers the price of one future order. The contract refuses any
+    /// price or expense cap outside the owner's rules; the customer then pays
+    /// exactly `amount` with `{"order_id": .., "sku": ..}` before `expires_ns`.
+    pub fn create_quote(
+        &mut self,
+        order_id: String,
+        sku: String,
+        amount: U128,
+        max_expense: U128,
+        expires_ns: u64,
+    ) {
+        self.assert_agent();
+        require!(!self.paused, "paused");
+        require!(valid_id(&order_id) && valid_id(&sku), "bad id");
+        let rules = self
+            .quote_rules
+            .get(&sku)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("no quote rules for this product"));
+        require!(rules.active, "quoting is off for this product");
+        require!(
+            self.products.get(&sku).map(|p| p.active).unwrap_or(false),
+            "product is not active"
+        );
+        require!(
+            amount.0 >= rules.min_price.0 && amount.0 <= rules.max_price.0,
+            "price outside the owner's range"
+        );
+        require!(
+            max_expense.0 * BPS_DENOMINATOR <= amount.0 * rules.max_expense_bps as u128,
+            "expense cap above the owner's share of the price"
+        );
+        let now = env::block_timestamp();
+        require!(
+            expires_ns > now && expires_ns - now <= rules.max_ttl_ns,
+            "expiry outside the owner's limit"
+        );
+        require!(
+            !self.quotes.contains_key(&order_id) && !self.orders.contains_key(&order_id),
+            "order id already used"
+        );
+        self.quotes.insert(
+            order_id.clone(),
+            Quote {
+                sku: sku.clone(),
+                amount,
+                max_expense,
+                created_ns: now,
+                expires_ns,
+                paid: false,
+            },
+        );
+        emit(
+            "quote_created",
+            serde_json::json!({
+                "order_id": order_id, "sku": sku, "amount": amount, "max_expense": max_expense, "expires_ns": expires_ns,
+            }),
+        );
+    }
+
     // ---------- subscriptions ----------
 
     /// Agent opens the next issue of a subscription once it is due: moves exactly
@@ -1794,6 +1958,17 @@ impl Contract {
 
     pub fn get_vendors(&self) -> Vec<(AccountId, bool)> {
         self.vendors.iter().map(|(k, v)| (k.clone(), *v)).collect()
+    }
+
+    pub fn get_quote(&self, order_id: String) -> Option<Quote> {
+        self.quotes.get(&order_id).cloned()
+    }
+
+    pub fn get_quote_rules(&self) -> Vec<(String, QuoteRules)> {
+        self.quote_rules
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect()
     }
 
     pub fn get_subscription(&self, subscription_id: String) -> Option<Subscription> {
@@ -2007,6 +2182,20 @@ impl Contract {
     }
 
     /// NEAR purchases plus cross-chain purchases that count against the cap.
+    /// An order's expense cap: its quote's, or else its product's.
+    fn expense_cap(&self, order_id: &str, order: &Order) -> u128 {
+        match self.quotes.get(order_id) {
+            Some(q) => q.max_expense.0,
+            None => {
+                self.products
+                    .get(&order.sku)
+                    .expect("product missing")
+                    .max_expense
+                    .0
+            }
+        }
+    }
+
     fn committed_spend(&self, order_id: &str, order: &Order) -> u128 {
         let evm: u128 = self
             .evm_purchases

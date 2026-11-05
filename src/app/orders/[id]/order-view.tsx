@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
+import { Fragment, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
 import { StatusBadge } from "@/components/status-badge";
 import { ReportMarkdown } from "@/components/report-markdown";
@@ -22,6 +22,7 @@ interface OrderData {
   priceUnits: string;
   authorised: boolean;
   subscription: { id: string; issue: number; of: number } | null;
+  quote: { depth: "brief" | "standard" | "deep"; needsDataset: boolean; breakdown: { data_units: string; ai_units: string; work_units: string; margin_units: string; rounding_units: string }; maxExpenseUnits: string; expiresAt: string; quoteTx: string | null; clamped: "min" | "max" | null; summary: string | null; sections: string[] | null } | null;
   brief: string | null;
   plan: { title: string; angles: string[]; use_dataset: boolean; dataset_reason: string } | null;
   transitions: { from_state: string | null; to_state: string; reason: string; at: string }[];
@@ -42,6 +43,7 @@ const STAGES: { key: string; label: string; states: string[] }[] = [
 
 const EVENT_LABELS: Record<string, string> = {
   payment_received: "Customer payment received",
+  quote_created: "Quote registered on-chain",
   issue_started: "Issue opened from the subscription escrow",
   intents_quote: "NEAR Intents price quote",
   intents_settlement: "Cross-chain settlement",
@@ -128,7 +130,8 @@ export function OrderView() {
 
           <Progress state={order.state} />
 
-          {order.state === "AWAITING_PAYMENT" && order.authorised && token && <PaymentPanel order={order} token={token} onPaid={load} />}
+          {order.quote && order.state === "AWAITING_PAYMENT" && <QuoteCard order={order} />}
+          {order.state === "AWAITING_PAYMENT" && order.authorised && token && !quoteExpired(order) && <PaymentPanel order={order} token={token} onPaid={load} />}
           {order.state === "AWAITING_APPROVAL" && (
             <Notice tone="pending">The agent wants to buy a dataset for {order.purchase ? <Money units={order.purchase.amount_units} /> : "this order"}. Purchases above 10 USDC wait for the owner to approve that exact purchase on-chain.</Notice>
           )}
@@ -279,6 +282,57 @@ function PaymentPanel({ order, token, onPaid }: { order: OrderData; token: strin
             <span className="text-ink-3">Settlement shown, not performed: NEAR Intents has no testnet. Pay in testnet USDC above.</span>
           </div>
         )}
+      </div>
+    </section>
+  );
+}
+
+const DEPTH_LABEL = { brief: "Brief (450-700 words)", standard: "Standard (800-1100 words)", deep: "Deep (1200-1600 words)" };
+
+function quoteExpired(order: OrderData) {
+  return !!order.quote && new Date(order.quote.expiresAt).getTime() < Date.now();
+}
+
+function QuoteCard({ order }: { order: OrderData }) {
+  const q = order.quote!;
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 15_000);
+    return () => clearInterval(t);
+  }, []);
+  const left = Math.round((new Date(q.expiresAt).getTime() - now) / 60_000);
+  const rows: [string, string][] = [
+    ["Dataset", q.breakdown.data_units],
+    ["AI (estimated)", q.breakdown.ai_units],
+    ["Research work", q.breakdown.work_units],
+    ["Business margin (40%)", q.breakdown.margin_units],
+    ["Rounding", q.breakdown.rounding_units],
+  ];
+  return (
+    <section className="mt-8 rounded-[var(--radius-card)] border border-rule bg-surface p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="font-medium">Your quote</h2>
+        <span className={`text-xs ${left <= 0 ? "text-failed" : "text-ink-3"}`}>{left <= 0 ? "Expired. Ask for a new quote in the store." : `Valid for about ${left} more minute${left === 1 ? "" : "s"}`}</span>
+      </div>
+      {q.summary && <p className="mt-2 text-sm text-ink-2">{q.summary}</p>}
+      {q.sections && (
+        <ol className="mt-3 list-decimal space-y-0.5 pl-5 text-sm text-ink-2">
+          {q.sections.map((x) => <li key={x}>{x}</li>)}
+        </ol>
+      )}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <dl className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1 text-sm">
+          <dt className="text-ink-3">Depth</dt><dd>{DEPTH_LABEL[q.depth]}</dd>
+          {rows.filter(([, v]) => BigInt(v) > 0n).map(([k, v]) => (
+            <Fragment key={k}><dt className="text-ink-3">{k}</dt><dd className="text-right"><Money units={v} /></dd></Fragment>
+          ))}
+          <dt className="border-t border-rule pt-1 font-medium">Price</dt><dd className="border-t border-rule pt-1 text-right font-medium"><Money units={order.priceUnits} /></dd>
+        </dl>
+        <div className="text-xs text-ink-3">
+          <p>The agent estimated the work; code computed the price; the contract checked it against the owner&apos;s limits before accepting it.{q.clamped === "min" ? " This is the business's minimum price." : q.clamped === "max" ? " Capped at the business's maximum price." : ""}</p>
+          <p className="mt-2">The agent may spend at most <Money units={q.maxExpenseUnits} /> on this order{q.needsDataset ? ", including the dataset" : " (AI only, no dataset)"}. The contract enforces that cap.</p>
+          {q.quoteTx && <a href={`https://testnet.nearblocks.io/txns/${q.quoteTx}`} target="_blank" rel="noreferrer" className="mt-2 inline-block font-mono text-accent">quote tx {q.quoteTx.slice(0, 10)}… ↗</a>}
+        </div>
       </div>
     </section>
   );

@@ -28,7 +28,7 @@ const CALL_GAS = "50000000000000"; // 50 TGas: request_purchase / mark_fulfilled
 const SETTLE_GAS = "300000000000000"; // 300 TGas: settle fans out several ft_transfer promises
 const EVM_GAS = "200000000000000"; // 200 TGas: request_evm_purchase -> MPC sign (50) -> callback (10)
 
-export type AgentMethod = "request_purchase" | "request_evm_purchase" | "mark_fulfilled" | "settle" | "retry_leg" | "refill_agent_gas" | "start_issue";
+export type AgentMethod = "request_purchase" | "request_evm_purchase" | "mark_fulfilled" | "settle" | "retry_leg" | "refill_agent_gas" | "start_issue" | "create_quote";
 
 export async function agentAddress(): Promise<string> {
   const r = await outlayer().getAddress("near");

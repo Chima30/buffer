@@ -763,6 +763,23 @@ fn settlement_reimburses_the_owner_for_signed_evm_purchases() {
 fn migrate_keeps_existing_state() {
     let mut c = evm_setup(); // pays o-1 and configures Ethereum
     let _ = evm_request(&mut c, EVM_VENDOR, 5 * USDC, 30 * GWEI);
+    as_owner(|| {
+        c.set_product(
+            "brief-subscription".into(),
+            U128(10 * USDC),
+            U128(2 * USDC),
+            true,
+        );
+        c.set_subscription_plan("brief-subscription".into(), 3_600_000_000_000, 2, 8, true);
+    });
+    testing_env!(ctx(token()).build());
+    let _ = c.ft_on_transfer(
+        acct("customer.testnet"),
+        U128(20 * USDC),
+        r#"{"subscription_id":"s-1","sku":"brief-subscription","issues":2}"#.into(),
+    );
+    c.subscription_plans.flush();
+    c.subscriptions.flush();
     c.products.flush();
     c.vendors.flush();
     c.orders.flush();
@@ -773,7 +790,7 @@ fn migrate_keeps_existing_state() {
         reserve_balance: U128(7),
         ..Treasury::default()
     };
-    // Rebuild the pre-subscriptions layout from the same collections, write it, then migrate.
+    // Rebuild the pre-quotes layout from the same collections, write it, then migrate.
     let Contract {
         owner,
         agent,
@@ -791,9 +808,11 @@ fn migrate_keeps_existing_state() {
         evm_vendors,
         evm_purchases,
         evm_nonce,
+        subscription_plans,
+        subscriptions,
         ..
     } = c;
-    let v3 = ContractV3 {
+    let v4 = ContractV4 {
         owner,
         agent,
         token_id,
@@ -813,20 +832,27 @@ fn migrate_keeps_existing_state() {
         evm_purchases,
         evm_nonce,
         treasury: treasury.clone(),
+        subscription_plans,
+        subscriptions,
     };
-    env::state_write(&v3);
+    env::state_write(&v4);
     testing_env!(ctx(contract_id()).build());
     let m = Contract::migrate();
     assert_eq!(m.get_config().policy_version, 3);
     assert_eq!(m.get_order("o-1".into()).unwrap().state, OrderState::Paid);
-    assert_eq!(m.get_products().len(), 1);
+    assert_eq!(m.get_products().len(), 2);
     assert!(m.get_evm_config().is_some());
     assert_eq!(m.get_evm_vendors().len(), 1);
     assert_eq!(m.get_evm_purchases("o-1".into()).len(), 1);
     assert_eq!(m.get_evm_nonce(), 1);
     assert_eq!(m.get_treasury(), treasury);
-    assert!(m.get_subscription_plans().is_empty());
-    assert!(m.get_subscription("s-1".into()).is_none());
+    assert_eq!(m.get_subscription_plans().len(), 1);
+    assert_eq!(
+        m.get_subscription("s-1".into()).unwrap().escrow.0,
+        20 * USDC
+    );
+    assert!(m.get_quote_rules().is_empty());
+    assert!(m.get_quote("q-1".into()).is_none());
 }
 
 // ---------- self-funding treasury ----------
@@ -1239,4 +1265,176 @@ fn cancelled_subscription_opens_no_issues() {
 fn only_owner_sets_plans() {
     let mut c = sub_setup();
     as_agent(|| c.set_subscription_plan("brief-subscription".into(), 1, 1, 52, true));
+}
+
+// ---------- quotes ----------
+
+const MIN: u64 = 60_000_000_000;
+
+/// custom-brief quoted between 5 and 50 USDC, expense cap at most 60% of the price, quotes open up to 30 minutes.
+fn quote_setup() -> Contract {
+    let mut c = setup();
+    as_owner(|| {
+        c.set_product("custom-brief".into(), U128(5 * USDC), U128(3 * USDC), true);
+        c.set_quote_rules(
+            "custom-brief".into(),
+            U128(5 * USDC),
+            U128(50 * USDC),
+            6000,
+            30 * MIN,
+            true,
+        );
+    });
+    c
+}
+
+fn quote(c: &mut Contract, id: &str, amount: u128, cap: u128, ttl: u64) {
+    at(agent(), 1_000);
+    c.create_quote(
+        id.into(),
+        "custom-brief".into(),
+        U128(amount),
+        U128(cap),
+        1_000 + ttl,
+    );
+}
+
+fn pay_quote(c: &mut Contract, id: &str, amount: u128, ts: u64) -> u128 {
+    let mut b = ctx(token());
+    b.block_timestamp(ts);
+    testing_env!(b.build());
+    match c.ft_on_transfer(
+        customer(),
+        U128(amount),
+        format!(r#"{{"order_id":"{id}","sku":"custom-brief"}}"#),
+    ) {
+        PromiseOrValue::Value(v) => v.0,
+        PromiseOrValue::Promise(_) => panic!("unexpected promise"),
+    }
+}
+
+#[test]
+fn quoted_order_pays_exactly_the_quote() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 12 * USDC, 7 * USDC, 30 * MIN);
+    assert_eq!(pay_quote(&mut c, "q-1", 11 * USDC, 2_000), 11 * USDC); // wrong amount returned
+    assert_eq!(pay_quote(&mut c, "q-1", 12 * USDC, 2_000), 0);
+    assert_eq!(c.get_order("q-1".into()).unwrap().gross.0, 12 * USDC);
+    assert!(c.get_quote("q-1".into()).unwrap().paid);
+    assert_eq!(pay_quote(&mut c, "q-1", 12 * USDC, 3_000), 12 * USDC); // paid once only
+}
+
+#[test]
+fn expired_quote_is_refused() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 12 * USDC, 7 * USDC, 30 * MIN);
+    assert_eq!(
+        pay_quote(&mut c, "q-1", 12 * USDC, 1_000 + 30 * MIN + 1),
+        12 * USDC
+    );
+    assert!(c.get_order("q-1".into()).is_none());
+}
+
+#[test]
+fn quoted_product_cannot_be_bought_without_a_quote() {
+    let mut c = quote_setup();
+    assert_eq!(pay_quote(&mut c, "q-9", 5 * USDC, 2_000), 5 * USDC);
+}
+
+#[test]
+#[should_panic(expected = "price outside the owner's range")]
+fn quote_above_max_is_refused() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 51 * USDC, 1, 30 * MIN);
+}
+
+#[test]
+#[should_panic(expected = "price outside the owner's range")]
+fn quote_below_min_is_refused() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 4 * USDC, 1, 30 * MIN);
+}
+
+#[test]
+#[should_panic(expected = "expense cap above the owner's share of the price")]
+fn quote_cannot_give_the_agent_a_big_budget() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 10 * USDC, 6 * USDC + 1, 30 * MIN);
+}
+
+#[test]
+#[should_panic(expected = "expiry outside the owner's limit")]
+fn quote_cannot_stay_open_too_long() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 10 * USDC, USDC, 30 * MIN + 1);
+}
+
+#[test]
+#[should_panic(expected = "agent only")]
+fn only_the_agent_quotes() {
+    let mut c = quote_setup();
+    at(customer(), 1_000);
+    c.create_quote(
+        "q-1".into(),
+        "custom-brief".into(),
+        U128(5 * USDC),
+        U128(1),
+        2_000,
+    );
+}
+
+#[test]
+#[should_panic(expected = "owner only")]
+fn only_the_owner_sets_quote_rules() {
+    let mut c = quote_setup();
+    as_agent(|| {
+        c.set_quote_rules(
+            "custom-brief".into(),
+            U128(1),
+            U128(1_000 * USDC),
+            10_000,
+            1,
+            true,
+        )
+    });
+}
+
+#[test]
+fn quote_cap_replaces_the_product_cap() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 20 * USDC, 12 * USDC, 30 * MIN);
+    pay_quote(&mut c, "q-1", 20 * USDC, 2_000);
+    // Product cap is 3 USDC, but this quote allows 12: a 9 USDC dataset fits.
+    let r =
+        as_agent(|| c.request_purchase("q-1".into(), vendor(), U128(9 * USDC), "dataset".into()));
+    assert!(matches!(r, PromiseOrValue::Promise(_)));
+    resolve_purchase(&mut c, "q-1", 0, true);
+    as_agent(|| c.mark_fulfilled("q-1".into(), "ab".repeat(32)));
+    as_agent(|| c.settle("q-1".into(), inference(1_000_000)));
+    let o = c.get_order("q-1".into()).unwrap();
+    // E = min(9 + 1, 12, 20) = 10; D = 10; C = 3; O = 7; reimb = 1.
+    assert_eq!(o.expenses_counted.0, 10 * USDC);
+    let amt = |k: LegKind| {
+        o.legs
+            .iter()
+            .find(|l| l.kind == k)
+            .map(|l| l.amount.0)
+            .unwrap_or(0)
+    };
+    assert_eq!(amt(LegKind::Contributor), 3 * USDC);
+    assert_eq!(amt(LegKind::ReimbOwner), USDC);
+    assert_eq!(
+        9 * USDC + amt(LegKind::Owner) + amt(LegKind::Contributor) + amt(LegKind::ReimbOwner),
+        20 * USDC
+    );
+}
+
+#[test]
+#[should_panic(expected = "purchase exceeds the order's expense cap")]
+fn quote_cap_also_limits_purchases() {
+    let mut c = quote_setup();
+    quote(&mut c, "q-1", 10 * USDC, 2 * USDC, 30 * MIN);
+    pay_quote(&mut c, "q-1", 10 * USDC, 2_000);
+    let _ =
+        as_agent(|| c.request_purchase("q-1".into(), vendor(), U128(3 * USDC), "dataset".into()));
 }

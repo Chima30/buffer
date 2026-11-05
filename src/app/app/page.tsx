@@ -25,6 +25,11 @@ interface Overview {
     plan: { interval_ns: number; min_issues: number; max_issues: number; active: boolean } | null;
     steps: { label: string; method: string; args: Record<string, unknown> }[];
   } | null;
+  quoteSetup: {
+    sku: string; title: string; contractSupports: boolean; policyAllows: boolean;
+    rules: { min_price: string; max_price: string; max_expense_bps: number; max_ttl_ns: number; active: boolean } | null;
+    steps: { label: string; method: string; args: Record<string, unknown> }[];
+  } | null;
   subscriptions: { id: string; onchain_subscription_id: string; state: string; issues_total: number; issues_started: number; issue_price_units: string; customer_account: string | null; next_due_at: string | null; refund_units: string | null; refund_status: string | null; created_at: string }[];
   pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; chain: "near" | "sepolia"; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string | null; evm_address: string | null } }[];
   treasury: { address: string; eth: string; usdc: string; explorerUrl: string } | null;
@@ -118,6 +123,15 @@ export default function OwnerConsole() {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function draftPricing() {
+    setBusy("Policy draft");
+    const r = await fetch("/api/policy/pricing-draft", { method: "POST" });
+    const j = await r.json().catch(() => ({}));
+    setNotice(r.ok ? { tone: "pending", text: j.version ? `Policy v${j.version} drafted. Sign "Anchor policy v${j.version}" in the policy card to put it in force.` : j.note } : { tone: "failed", text: j.error ?? "Could not draft the policy" });
+    setBusy(null);
+    await load();
   }
 
   /** Every owner action: wallet signs a real transaction, then the app verifies and records it. */
@@ -425,19 +439,7 @@ export default function OwnerConsole() {
                           <div className="rounded-md border border-rule p-3">
                             <p className="text-xs font-medium">Allow selling it in the policy</p>
                             <p className="mt-1 text-xs text-ink-3">The agent only delivers products the signed policy prices. This drafts the next policy version with {su.title} at no less than its price; anchor it in the policy card above.</p>
-                            <button
-                              type="button"
-                              disabled={!!busy}
-                              onClick={async () => {
-                                setBusy("Policy draft");
-                                const r = await fetch("/api/policy/pricing-draft", { method: "POST" });
-                                const j = await r.json().catch(() => ({}));
-                                setNotice(r.ok ? { tone: "pending", text: j.version ? `Policy v${j.version} drafted. Sign "Anchor policy v${j.version}" to put it in force.` : j.note } : { tone: "failed", text: j.error ?? "Could not draft the policy" });
-                                setBusy(null);
-                                await load();
-                              }}
-                              className="press mt-2 h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40"
-                            >
+                            <button type="button" disabled={!!busy} onClick={draftPricing} className="press mt-2 h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40">
                               Draft the policy change
                             </button>
                           </div>
@@ -478,6 +480,42 @@ export default function OwnerConsole() {
                             ))}
                           </ul>
                         )}
+                      </div>
+                    );
+                  })()}
+                </Card>
+              )}
+
+              {data.quoteSetup && (
+                <Card title="Custom quotes">
+                  {(() => {
+                    const qs = data.quoteSetup!;
+                    if (!qs.contractSupports) return <p className="text-sm text-ink-2">Custom quotes need the latest contract upgrade.</p>;
+                    return (
+                      <div className="space-y-3 text-sm">
+                        <p className="text-ink-2">
+                          {qs.rules?.active
+                            ? <>The agent may quote <Money units={qs.rules.min_price} /> to <Money units={qs.rules.max_price} />, give itself at most {qs.rules.max_expense_bps / 100}% of the price to spend, and keep a quote open {Math.round(qs.rules.max_ttl_ns / 6e10)} minutes. The contract refuses anything else.</>
+                            : <>Not on sale yet. The owner sets the limits the contract will enforce on every quote.</>}
+                        </p>
+                        {!qs.policyAllows && (
+                          <div className="rounded-md border border-rule p-3">
+                            <p className="text-xs font-medium">Allow selling it in the policy</p>
+                            <p className="mt-1 text-xs text-ink-3">Drafts the next policy version with {qs.title} at no less than the minimum price; anchor it in the policy card.</p>
+                            <button type="button" disabled={!!busy} onClick={draftPricing} className="press mt-2 h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40">Draft the policy change</button>
+                          </div>
+                        )}
+                        {qs.steps.map((st) => (
+                          <div key={st.method} className="rounded-md border border-rule p-3">
+                            <p className="text-xs font-medium">{st.label}</p>
+                            {isOwner && (
+                              <button type="button" disabled={!!busy} onClick={() => act(st.label, data.contract.id, st.method, st.args, "30000000000000")} className="press mt-2 h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40">
+                                Sign with wallet
+                              </button>
+                            )}
+                            <CliFallback label={st.label} command={cliCommand(data.contract.id, st.method, st.args, data.contract.owner, "30 Tgas")} busy={!!busy} onSubmit={(h) => recordPasted(st.label, h)} />
+                          </div>
+                        ))}
                       </div>
                     );
                   })()}

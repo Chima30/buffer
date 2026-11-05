@@ -10,7 +10,7 @@ import { getConfig, type OnchainConfig } from "./contract";
 import { db, must } from "./db";
 import { nearConfig } from "./env";
 
-export interface ProductRow { id: string; sku: string; title: string; description: string | null; price_units: string; max_expense_units: string; vendor_id: string | null; kind: "single" | "subscription" }
+export interface ProductRow { id: string; sku: string; title: string; description: string | null; price_units: string; max_expense_units: string; vendor_id: string | null; kind: "single" | "subscription" | "quote" }
 export interface VendorRow { id: string; name: string; near_account: string | null; sku: string; unit_price_units: string; chain: "near" | "sepolia"; evm_address: string | null; description: string | null }
 
 export interface BusinessContext {

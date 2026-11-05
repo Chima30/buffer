@@ -6,6 +6,7 @@ import { cadence } from "@/lib/domain/cadence";
 import { rememberLocal } from "@/lib/client/session";
 
 interface Product { sku: string; title: string; description: string | null; priceUnits: string; vendor: { name: string; chain: "near" | "sepolia" } }
+interface QuoteOffer { sku: string; title: string; description: string | null; minUnits: string; maxUnits: string }
 interface Plan { sku: string; title: string; description: string | null; issuePriceUnits: string; intervalSeconds: number; minIssues: number; maxIssues: number }
 
 const usdc = (units: string | bigint) => (Number(units) / 1e6).toFixed(2);
@@ -15,6 +16,7 @@ export default function StorePage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loaded, setLoaded] = useState(false);
+  const [quoteOffers, setQuoteOffers] = useState<QuoteOffer[]>([]);
   const [sku, setSku] = useState("weekly-market-brief");
   useEffect(() => {
     fetch("/api/products")
@@ -22,12 +24,14 @@ export default function StorePage() {
       .then((j) => {
         setProducts(j.products ?? []);
         setPlans(j.subscriptions ?? []);
+        setQuoteOffers(j.quotes ?? []);
       })
       .catch(() => setProducts([]))
       .finally(() => setLoaded(true));
   }, []);
   const selected = products.find((p) => p.sku === sku);
   const plan = plans.find((p) => p.sku === sku);
+  const quoteOffer = quoteOffers.find((q) => q.sku === sku);
   const [issuesInput, setIssues] = useState<number | null>(null);
   const issues = plan ? Math.min(plan.maxIssues, Math.max(plan.minIssues, issuesInput ?? Math.min(plan.maxIssues, Math.max(plan.minIssues, 4)))) : 0;
   const [brief, setBrief] = useState("");
@@ -41,6 +45,18 @@ export default function StorePage() {
     setError(null);
     try {
       if (account.trim()) sessionStorage.setItem("buffer-payer", account.trim());
+      if (quoteOffer) {
+        const res = await fetch("/api/quotes", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ request: brief, customerAccount: account.trim() || undefined }),
+        });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.error ?? "Could not get a quote");
+        rememberLocal({ kind: "order", id: j.orderId, token: j.accessToken, title: `Quote: ${brief.slice(0, 70)}` });
+        router.push(`/orders/${j.orderId}#t=${j.accessToken}`);
+        return;
+      }
       if (plan) {
         const res = await fetch("/api/subscriptions", {
           method: "POST",
@@ -102,6 +118,25 @@ export default function StorePage() {
               </label>
             );
           })}
+          {quoteOffers.map((p) => {
+            const on = p.sku === sku;
+            return (
+              <label key={p.sku} className={`flex cursor-pointer gap-3 rounded-[var(--radius-card)] border bg-surface p-4 transition-colors duration-150 ${on ? "border-ink/30 shadow-[var(--highlight)]" : "border-rule hover:bg-raised"}`}>
+                <input type="radio" name="sku" value={p.sku} checked={on} onChange={() => setSku(p.sku)} className="sr-only" />
+                <span aria-hidden className={`mt-1 grid h-4 w-4 shrink-0 place-items-center rounded-full border ${on ? "border-accent" : "border-rule-strong"}`}>
+                  <span className={`h-2 w-2 rounded-full bg-accent transition-opacity duration-150 ${on ? "opacity-100" : "opacity-0"}`} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline justify-between gap-3">
+                    <span className="font-medium">{p.title}</span>
+                    <span className="font-mono text-sm tabular">{usdc(p.minUnits)}–{usdc(p.maxUnits)} <span className="text-ink-3">USDC</span></span>
+                  </span>
+                  <span className="mt-1 block text-sm text-ink-2">{p.description}</span>
+                  <span className="mt-2 block text-xs text-ink-3">The AI estimates the work, code sets the price, and the contract refuses any quote outside the owner&apos;s limits.</span>
+                </span>
+              </label>
+            );
+          })}
           {plans.map((p) => {
             const on = p.sku === sku;
             return (
@@ -130,12 +165,12 @@ export default function StorePage() {
       </section>
 
       <form onSubmit={submit} className="space-y-5 rounded-[var(--radius-card)] border border-rule bg-surface p-5 sm:p-6 lg:sticky lg:top-10">
-        <p className="font-medium">{plan?.title ?? selected?.title ?? "Weekly Market Brief"}</p>
+        <p className="font-medium">{quoteOffer?.title ?? plan?.title ?? selected?.title ?? "Weekly Market Brief"}</p>
         <label className="block">
-          <span className="text-sm font-medium">{plan ? "What topic should every issue follow?" : "What should the brief cover?"}</span>
+          <span className="text-sm font-medium">{quoteOffer ? "Describe what you need" : plan ? "What topic should every issue follow?" : "What should the brief cover?"}</span>
           <textarea
             required
-            minLength={10}
+            minLength={quoteOffer ? 20 : 10}
             maxLength={plan ? 2000 : 4000}
             rows={5}
             value={brief}
@@ -168,7 +203,7 @@ export default function StorePage() {
         </label>
         {error && <p role="alert" className="rounded-md bg-failed-soft p-3 text-sm text-failed">{error}</p>}
         <button disabled={busy} className="press h-11 w-full rounded-lg bg-ink px-4 text-sm font-medium text-paper transition-opacity duration-150 hover:opacity-90 disabled:opacity-60">
-          {busy ? (plan ? "Creating subscription" : "Creating order") : "Continue to payment"}
+          {busy ? (quoteOffer ? "The agent is scoping your request, about 30 seconds…" : plan ? "Creating subscription" : "Creating order") : quoteOffer ? "Get a quote" : "Continue to payment"}
         </button>
         <p className="text-xs text-ink-3">Testnet only. Testnet USDC has no value; get some free at faucet.circle.com, NEAR Testnet.</p>
       </form>

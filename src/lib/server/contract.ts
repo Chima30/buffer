@@ -73,6 +73,17 @@ export async function getSubscriptionPlans(): Promise<[string, { interval_ns: nu
   return viewFunction<[string, { interval_ns: number; min_issues: number; max_issues: number; active: boolean }][]>(nearConfig().contractId, "get_subscription_plans").catch(() => null);
 }
 
+export interface OnchainQuoteRules { min_price: string; max_price: string; max_expense_bps: number; max_ttl_ns: number; active: boolean }
+
+/** Null before the quotes upgrade is deployed. */
+export async function getQuoteRules(): Promise<[string, OnchainQuoteRules][] | null> {
+  return viewFunction<[string, OnchainQuoteRules][]>(nearConfig().contractId, "get_quote_rules").catch(() => null);
+}
+
+export async function getQuote(orderId: string): Promise<{ sku: string; amount: string; max_expense: string; expires_ns: number; paid: boolean } | null> {
+  return viewFunction<{ sku: string; amount: string; max_expense: string; expires_ns: number; paid: boolean } | null>(nearConfig().contractId, "get_quote", { order_id: orderId }).catch(() => null);
+}
+
 export async function getOrder(orderId: string): Promise<OnchainOrder | null> {
   return viewFunction<OnchainOrder | null>(nearConfig().contractId, "get_order", { order_id: orderId });
 }

@@ -86,6 +86,15 @@ A customer can prepay a series of briefs on one topic in a single payment, and t
 
 Revenue counts one issue at a time, when it opens. Money still in escrow is the customer's.
 
+## Custom quotes
+
+A customer can describe any research request in their own words and get a price in about half a minute:
+
+1. **The AI only estimates the work.** Private inference on NEAR AI Cloud returns the scope: sections, depth (brief, standard or deep), and whether the vendor's dataset is needed. It never sees or names a price.
+2. **Code computes the price** with a fixed formula: dataset + estimated AI + research work for that depth, divided by (1 − the 40% margin), rounded up to 0.50 USDC. The expense cap is the dataset plus a 1 USDC AI allowance. The breakdown is shown to the customer.
+3. **The contract enforces the owner's limits.** The agent registers the quote with `create_quote`. The contract refuses it if the price is outside 5–50 USDC, if the expense cap is above 60% of the price, or if it stays open longer than 30 minutes (`set_quote_rules`, owner only). The customer must pay exactly the quoted amount before it expires, and a quoted product cannot be bought at any other price.
+4. **The quote's expense cap replaces the product's** for purchases and settlement, so the agent can never give itself a bigger budget than the quote allows, even if a request tries to talk it into one.
+
 ## Chain Signatures (Ethereum Sepolia)
 
 The contract owns an Ethereum address derived by NEAR's MPC network (`v1.signer-prod.testnet`, path `buffer-treasury`). No one holds its private key. A cross-chain purchase works like this:
@@ -130,7 +139,7 @@ near contract call-function as-read-only buffer-john-desk.testnet get_order json
 
 ## Stack and code
 
-- **Contract.** `contract/` is Rust with near-sdk 5. It has 71 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
+- **Contract.** `contract/` is Rust with near-sdk 5. It has 82 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
 - **App.** Next.js 16 on Vercel with Supabase. Row-level security denies all public access, the ledger is append-only, and job leases use `FOR UPDATE SKIP LOCKED`. Supabase Cron calls `/api/runtime/tick` every minute.
 - **Deterministic core.** `src/lib/domain/` holds the policy engine, the revenue mirror of the contract formula, the order state machine and the policy builder's checks. Tests: `npm test`.
 - **Integrations.** `src/lib/server/` contains:
