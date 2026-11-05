@@ -95,6 +95,17 @@ A customer can describe any research request in their own words and get a price 
 3. **The contract enforces the owner's limits.** The agent registers the quote with `create_quote`. The contract refuses it if the price is outside 5–50 USDC, if the expense cap is above 60% of the price, or if it stays open longer than 30 minutes (`set_quote_rules`, owner only). The customer must pay exactly the quoted amount before it expires, and a quoted product cannot be bought at any other price.
 4. **The quote's expense cap replaces the product's** for purchases and settlement, so the agent can never give itself a bigger budget than the quote allows, even if a request tries to talk it into one.
 
+## Vendor competition across chains
+
+When an order needs data, the agent doesn't call one fixed vendor. It runs a competition:
+
+- **Every approved vendor bids:** the NEAR vendor and vendors on Ethereum Sepolia, Base Sepolia and Arbitrum Sepolia. Demo vendors publish an hourly price list (within ±15% of their base price, deterministic, so anyone can recompute it).
+- **Real total cost.** For an EVM vendor the agent adds that chain's live gas for the USDC transfer, valued in USDC with the Pyth ETH/USD price. NEAR purchases are paid from the order's escrow with no extra gas.
+- **Only bids the owner's rules allow.** A bid is skipped if the vendor or chain isn't approved in the policy or the contract, if it's above what the order may still spend, or if the treasury can't pay on that chain (not enough USDC or gas). Skipped, never failed.
+- **Code picks the winner:** the cheapest total, ties to NEAR. The AI only decided that a dataset is needed. The order page shows every bid, the winner, and why the others lost.
+
+The same treasury address, one key derived by the NEAR MPC network, pays on all three EVM chains. Each chain has its own owner-set config (`set_evm_chain`: USDC address, fee cap, gas limit), its own vendor approvals (`set_evm_chain_vendor`) and its own nonce, all in the contract. The owner sets the constraints; the agent decides inside them.
+
 ## Chain Signatures (Ethereum Sepolia)
 
 The contract owns an Ethereum address derived by NEAR's MPC network (`v1.signer-prod.testnet`, path `buffer-treasury`). No one holds its private key. A cross-chain purchase works like this:
@@ -139,7 +150,7 @@ near contract call-function as-read-only buffer-john-desk.testnet get_order json
 
 ## Stack and code
 
-- **Contract.** `contract/` is Rust with near-sdk 5. It has 82 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
+- **Contract.** `contract/` is Rust with near-sdk 5. It has 90 unit tests (`cd contract && cargo test --lib`). CI builds the wasm artifact and prints its sha256.
 - **App.** Next.js 16 on Vercel with Supabase. Row-level security denies all public access, the ledger is append-only, and job leases use `FOR UPDATE SKIP LOCKED`. Supabase Cron calls `/api/runtime/tick` every minute.
 - **Deterministic core.** `src/lib/domain/` holds the policy engine, the revenue mirror of the contract formula, the order state machine and the policy builder's checks. Tests: `npm test`.
 - **Integrations.** `src/lib/server/` contains:

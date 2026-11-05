@@ -10,6 +10,8 @@
  */
 import { applyEdit, approvalThresholdUnits, describeChanges, editableValues, EDITABLE, lintPolicy, policyEditSchema, type Change, type PolicyEdit } from "@/lib/domain/policy/draft";
 import { policyHash } from "@/lib/domain/policy/hash";
+import { withMoreChains } from "@/lib/domain/policy/defaults";
+import { chainByKey } from "./chains";
 import { formatUnits } from "@/lib/domain/money";
 import type { PolicyDocument } from "@/lib/domain/policy/schema";
 import { evaluationContext, loadBusiness, promoteAnchoredDraft } from "./business";
@@ -147,9 +149,10 @@ export async function openDraft(businessId: string, onchain: OnchainConfig) {
 
 
 /**
- * Drafts the next policy version so it may sell every active product it does not
- * price yet, at no less than the product's listed price. Like any draft it does
- * nothing until the owner anchors its hash on-chain.
+ * Drafts the next policy version that catches up with what the owner added:
+ * a minimum price for every active product the policy does not price yet, and
+ * access to approved vendors on EVM chains the policy does not list yet. Like
+ * any draft it does nothing until the owner anchors its hash on-chain.
  */
 export async function draftProductPricing(): Promise<{ version: number; hash: string; added: string[] } | null> {
   const onchain = await getConfig();
@@ -158,18 +161,33 @@ export async function draftProductPricing(): Promise<{ version: number; hash: st
   const ctx = await loadBusiness();
   const priced = ctx.policy.rules.pricing.min_price_units;
   const missing = ctx.products.filter((p) => priced[p.sku] === undefined);
-  if (missing.length === 0) return null;
-  const next: PolicyDocument = {
+
+  let next: PolicyDocument = {
     ...ctx.policy,
-    version: ctx.policy.version + 1,
     rules: {
       ...ctx.policy.rules,
       pricing: { min_price_units: { ...priced, ...Object.fromEntries(missing.map((p) => [p.sku, String(p.price_units)])) } },
     },
   };
+  // Vendors on extra EVM chains (the original chain is covered by `crosschain`).
+  const original = ctx.policy.rules.crosschain?.chain_id;
+  const extra = ctx.vendors
+    .filter((v) => v.chain !== "near" && v.evm_address)
+    .map((v) => ({ v, chain: chainByKey(v.chain) }))
+    .filter((x): x is { v: typeof x.v; chain: NonNullable<typeof x.chain> } => !!x.chain && x.chain.chainId !== original)
+    .map(({ v, chain }) => ({ chainId: chain.chainId, token: chain.usdc, vendor: v.evm_address!, vendorId: v.id, name: `${v.name} on ${chain.name}` }));
+  const withChains = withMoreChains(next, extra);
+  const chainsAdded = withChains !== next;
+  next = withChains;
+  if (missing.length === 0 && !chainsAdded) return null;
+  next = { ...next, version: ctx.policy.version + 1 };
+
   const hash = policyHash(next);
-  const text = `Allow selling ${missing.map((p) => `${p.title} (${p.sku}) at no less than ${formatUnits(BigInt(p.price_units))} USDC`).join("; ")}.`;
+  const parts = [
+    ...(missing.length ? [`Allow selling ${missing.map((p) => `${p.title} (${p.sku}) at no less than ${formatUnits(BigInt(p.price_units))} USDC`).join("; ")}`] : []),
+    ...(chainsAdded ? [`Allow buying data from ${extra.map((e) => e.name).join(" and ")}, paid in that chain's USDC through Chain Signatures, under the same limits and approvals`] : []),
+  ];
   await db().from("policies").delete().eq("business_id", ctx.business.id).in("status", ["draft", "pending_signature"]);
-  must(await db().from("policies").insert({ business_id: ctx.business.id, version: next.version, source_text: text, rules: next.rules, rules_hash: hash, status: "draft" }).select("id").single(), "save pricing draft");
-  return { version: next.version, hash, added: missing.map((p) => p.sku) };
+  must(await db().from("policies").insert({ business_id: ctx.business.id, version: next.version, source_text: `${parts.join(". ")}.`, rules: next.rules, rules_hash: hash, status: "draft" }).select("id").single(), "save catch-up draft");
+  return { version: next.version, hash, added: [...missing.map((p) => p.sku), ...(chainsAdded ? extra.map((e) => e.name) : [])] };
 }

@@ -31,7 +31,7 @@ export async function deliverDataset(onchainOrderId: string, purchaseIndex: numb
 }
 
 /**
- * Demo vendor on Ethereum Sepolia. Payment is a REAL Sepolia USDC transfer from the
+ * Demo vendors on EVM testnets (Ethereum, Base, Arbitrum Sepolia). Payment is a REAL USDC transfer on that chain from the
  * Buffer treasury (signed by NEAR Chain Signatures); the dataset is a small static
  * pack written for this demo and labelled as such.
  */
@@ -48,9 +48,9 @@ export const EVM_VENDOR_DATASET = {
 
 export async function deliverEvmDataset(onchainOrderId: string, index: number, evmTxHash: string | null): Promise<{ ok: true; dataset: typeof EVM_VENDOR_DATASET } | { ok: false; reason: string }> {
   const { getEvmPurchases, treasury, verifyUsdcTransfer } = await import("./evm");
-  if (!evmTxHash) return { ok: false, reason: "No Sepolia transaction recorded" };
+  if (!evmTxHash) return { ok: false, reason: "No EVM transaction recorded" };
   const p = (await getEvmPurchases(onchainOrderId))[index];
   if (!p || p.status !== "Signed") return { ok: false, reason: "Purchase is not signed on-chain" };
-  const check = await verifyUsdcTransfer(evmTxHash as `0x${string}`, { token: p.token, from: await treasury(), to: p.vendor, amount: BigInt(p.amount) });
-  return check.state === "CONFIRMED" ? { ok: true, dataset: EVM_VENDOR_DATASET } : { ok: false, reason: `Sepolia payment not confirmed (${check.state})` };
+  const check = await verifyUsdcTransfer(evmTxHash as `0x${string}`, { token: p.token, from: await treasury(), to: p.vendor, amount: BigInt(p.amount), chainId: p.chain_id });
+  return check.state === "CONFIRMED" ? { ok: true, dataset: EVM_VENDOR_DATASET } : { ok: false, reason: `Payment on chain ${p.chain_id} not confirmed (${check.state})` };
 }

@@ -12,7 +12,9 @@ import type { PolicyDocument } from "@/lib/domain/policy/schema";
 import { promoteAnchoredDraft } from "@/lib/server/business";
 import { db } from "@/lib/server/db";
 import { openDraft, ownerCommands } from "@/lib/server/policy-builder";
-import { treasuryBalances } from "@/lib/server/evm";
+import { getEvmChainConfigs, getEvmVendorApprovals, treasury as treasuryAddress, treasuryBalances, treasuryBalancesAll } from "@/lib/server/evm";
+import { evmChains } from "@/lib/server/chains";
+import { vendorPrice } from "@/lib/server/procurement";
 import { nearBalance } from "@/lib/server/near-rpc";
 import { sepoliaConfig } from "@/lib/server/env";
 import { nearConfig } from "@/lib/server/env";
@@ -146,6 +148,51 @@ async function overview() {
       }
     : null;
 
+  // Vendor competition: each chain's contract config, treasury balances, vendors and what is left to switch on.
+  const [chainConfigs, chainApprovals, balances, vendorRows, tAddr] = await Promise.all([
+    getEvmChainConfigs().catch(() => []),
+    getEvmVendorApprovals().catch(() => new Map<number, Set<string>>()),
+    treasuryBalancesAll().catch(() => []),
+    db().from("vendors").select("id,name,chain,near_account,evm_address,unit_price_units,approved").eq("approved", true).order("chain"),
+    treasuryAddress().catch(() => null),
+  ]);
+  const originalChain = (await getEvmChainConfigs().catch(() => []))[0]?.chain_id;
+  const policyChains = new Set([...(activeDoc?.rules.crosschain ? [activeDoc.rules.crosschain.chain_id] : []), ...(activeDoc?.rules.crosschain_chains ?? []).map((c) => c.chain_id)]);
+  const vendors = (vendorRows.data ?? []).map((v) => ({ id: v.id, name: v.name, chain: v.chain, address: v.chain === "near" ? v.near_account : v.evm_address, priceNowUnits: vendorPrice({ id: v.id, unit_price_units: String(v.unit_price_units) }).toString(), basePriceUnits: String(v.unit_price_units) }));
+  const chainsSetup = {
+    treasuryAddress: tAddr,
+    policyCoversVendors: (vendorRows.data ?? []).every((v) => v.chain === "near" || (activeDoc?.rules.procurement.approved_vendor_ids.includes(v.id) ?? false)),
+    chains: evmChains().map((c) => {
+      const cfg = chainConfigs.find((x) => x.chain_id === c.chainId);
+      const bal = balances.find((b) => b.chain.chainId === c.chainId);
+      const onChainVendors = vendors.filter((v) => v.chain === c.key && v.address);
+      const approved = chainApprovals.get(c.chainId) ?? new Set<string>();
+      const isOriginal = originalChain === c.chainId;
+      return {
+        key: c.key,
+        name: c.name,
+        chainId: c.chainId,
+        configured: !!cfg,
+        inPolicy: policyChains.has(c.chainId),
+        eth: bal ? bal.eth.toString() : null,
+        usdc: bal ? bal.usdc.toString() : null,
+        explorerAddress: tAddr ? `${c.explorer}/address/${tAddr}` : null,
+        vendors: onChainVendors.map((v) => ({ ...v, approvedOnChain: approved.has((v.address ?? "").toLowerCase()) })),
+        steps: [
+          ...(!cfg && !isOriginal
+            ? [{ label: `Switch on ${c.name}`, method: "set_evm_chain", args: { config: { mpc_contract: sepoliaConfig().mpcContract, chain_id: c.chainId, usdc: c.usdc, max_fee_per_gas_cap: c.defaults.maxFeePerGasCapWei, gas_limit: c.defaults.gasLimit } } }]
+            : []),
+          ...(isOriginal
+            ? []
+            : onChainVendors
+                .filter((v) => !approved.has((v.address ?? "").toLowerCase()))
+                .map((v) => ({ label: `Approve ${v.name} on ${c.name}`, method: "set_evm_chain_vendor", args: { chain_id: c.chainId, vendor: v.address, approved: true } }))),
+        ],
+      };
+    }),
+    nearVendors: vendors.filter((v) => v.chain === "near"),
+  };
+
   // Low balances that would stall the business during judging.
   const YOCTO = 10n ** 24n;
   const alerts: string[] = [];
@@ -187,6 +234,7 @@ async function overview() {
     },
     subscriptionSetup,
     quoteSetup,
+    chainsSetup,
     subscriptions: subs.data ?? [],
     pendingApprovals: pending.data ?? [],
     orders: orders.data ?? [],

@@ -11,7 +11,7 @@ import { db, must } from "./db";
 import { nearConfig } from "./env";
 
 export interface ProductRow { id: string; sku: string; title: string; description: string | null; price_units: string; max_expense_units: string; vendor_id: string | null; kind: "single" | "subscription" | "quote" }
-export interface VendorRow { id: string; name: string; near_account: string | null; sku: string; unit_price_units: string; chain: "near" | "sepolia"; evm_address: string | null; description: string | null }
+export interface VendorRow { id: string; name: string; near_account: string | null; sku: string; unit_price_units: string; chain: "near" | "sepolia" | "base-sepolia" | "arbitrum-sepolia"; evm_address: string | null; description: string | null }
 
 export interface BusinessContext {
   business: { id: string; name: string; contract_id: string; status: "active" | "paused" };

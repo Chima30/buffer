@@ -25,13 +25,23 @@ interface Overview {
     plan: { interval_ns: number; min_issues: number; max_issues: number; active: boolean } | null;
     steps: { label: string; method: string; args: Record<string, unknown> }[];
   } | null;
+  chainsSetup: {
+    treasuryAddress: string | null;
+    policyCoversVendors: boolean;
+    chains: {
+      key: string; name: string; chainId: number; configured: boolean; inPolicy: boolean; eth: string | null; usdc: string | null; explorerAddress: string | null;
+      vendors: { id: string; name: string; address: string | null; priceNowUnits: string; basePriceUnits: string; approvedOnChain: boolean }[];
+      steps: { label: string; method: string; args: Record<string, unknown> }[];
+    }[];
+    nearVendors: { id: string; name: string; address: string | null; priceNowUnits: string }[];
+  };
   quoteSetup: {
     sku: string; title: string; contractSupports: boolean; policyAllows: boolean;
     rules: { min_price: string; max_price: string; max_expense_bps: number; max_ttl_ns: number; active: boolean } | null;
     steps: { label: string; method: string; args: Record<string, unknown> }[];
   } | null;
   subscriptions: { id: string; onchain_subscription_id: string; state: string; issues_total: number; issues_started: number; issue_price_units: string; customer_account: string | null; next_due_at: string | null; refund_units: string | null; refund_status: string | null; created_at: string }[];
-  pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; chain: "near" | "sepolia"; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string | null; evm_address: string | null } }[];
+  pendingApprovals: { id: string; amount_units: string; onchain_index: number; created_at: string; chain: string; orders: { onchain_order_id: string; state: string }; vendors: { name: string; near_account: string | null; evm_address: string | null } }[];
   treasury: { address: string; eth: string; usdc: string; explorerUrl: string } | null;
   alerts: string[];
   refunds: { id: string; onchain_order_id: string; state: string; price_units: string; topUpUnits: string }[];
@@ -202,7 +212,7 @@ export default function OwnerConsole() {
                 ) : (
                   <ul className="space-y-4">
                     {data.pendingApprovals.map((p) => {
-                      const evm = p.chain === "sepolia";
+                      const evm = p.chain !== "near";
                       const approve = evm ? "approve_evm_purchase" : "approve_purchase";
                       const reject = evm ? "reject_evm_purchase" : "reject_purchase";
                       const args = { order_id: p.orders.onchain_order_id, index: p.onchain_index };
@@ -521,6 +531,62 @@ export default function OwnerConsole() {
                   })()}
                 </Card>
               )}
+
+              <Card title="Vendors and chains">
+                {(() => {
+                  const cs = data.chainsSetup;
+                  const eth = (w: string | null) => (w === null ? "—" : (Number(BigInt(w) / 10n ** 12n) / 1e6).toFixed(4));
+                  return (
+                    <div className="space-y-3 text-sm">
+                      <p className="text-ink-2">When an order needs data, the agent asks every approved vendor for its price this hour, adds that chain&apos;s gas, and buys from the cheapest within your limits.</p>
+                      {!cs.policyCoversVendors && (
+                        <div className="rounded-md border border-rule p-3">
+                          <p className="text-xs font-medium">Allow the new vendors in the policy</p>
+                          <p className="mt-1 text-xs text-ink-3">Drafts the next policy version adding the Base and Arbitrum vendors under the same limits and approvals; anchor it in the policy card.</p>
+                          <button type="button" disabled={!!busy} onClick={draftPricing} className="press mt-2 h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40">Draft the policy change</button>
+                        </div>
+                      )}
+                      <ul className="divide-y divide-rule border-t border-rule">
+                        {cs.nearVendors.map((v) => (
+                          <li key={v.id} className="flex items-baseline justify-between gap-2 py-2.5">
+                            <span><span className="font-medium">NEAR</span> <span className="text-xs text-ink-3">{v.name}</span></span>
+                            <span className="text-xs text-ink-3">this hour <Money units={v.priceNowUnits} /></span>
+                          </li>
+                        ))}
+                        {cs.chains.map((c) => (
+                          <li key={c.key} className="py-2.5">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="font-medium">{c.name}</span>
+                              <span className={`text-xs ${c.configured && c.inPolicy ? "text-real" : "text-ink-3"}`}>{c.configured ? (c.inPolicy ? "on" : "on in the contract, not in the policy yet") : "off"}</span>
+                            </div>
+                            <p className="mt-0.5 text-xs text-ink-3">
+                              Treasury: {c.usdc === null ? "—" : <Money units={c.usdc} />} · {eth(c.eth)} ETH for gas
+                              {c.explorerAddress && <> · <a href={c.explorerAddress} target="_blank" rel="noreferrer" className="text-accent">explorer ↗</a></>}
+                            </p>
+                            {c.vendors.map((v) => (
+                              <p key={v.id} className="text-xs text-ink-3">{v.name}: this hour <Money units={v.priceNowUnits} />{v.approvedOnChain ? "" : " · not approved in the contract yet"}</p>
+                            ))}
+                            {c.steps.map((st) => (
+                              <div key={st.label} className="mt-2 rounded-md border border-rule p-3">
+                                <p className="text-xs font-medium">{st.label}</p>
+                                {isOwner && (
+                                  <button type="button" disabled={!!busy} onClick={() => act(st.label, data.contract.id, st.method, st.args, "30000000000000")} className="press mt-2 h-8 rounded-lg bg-ink px-3 text-xs font-medium text-paper disabled:opacity-40">Sign with wallet</button>
+                                )}
+                                <CliFallback label={st.label} command={cliCommand(data.contract.id, st.method, st.args, data.contract.owner, "30 Tgas")} busy={!!busy} onSubmit={(h) => recordPasted(st.label, h)} />
+                              </div>
+                            ))}
+                          </li>
+                        ))}
+                      </ul>
+                      {cs.treasuryAddress && (
+                        <p className="text-xs text-ink-3">
+                          Fund the treasury <span className="break-all font-mono">{cs.treasuryAddress}</span> on each chain: test USDC from faucet.circle.com, and a little test ETH for gas from a Base or Arbitrum Sepolia faucet. A chain the treasury cannot pay on is skipped, never failed.
+                        </p>
+                      )}
+                    </div>
+                  );
+                })()}
+              </Card>
 
               <Card title="Agent">
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">

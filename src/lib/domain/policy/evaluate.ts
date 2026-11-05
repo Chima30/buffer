@@ -20,6 +20,8 @@ export interface ProposedAction {
   /** Account that would receive funds: a NEAR account, or a 0x address for cross-chain purchases. */
   destination?: string;
   vendorId?: string;
+  /** EVM chain of a cross-chain purchase (defaults to the policy's original chain). */
+  chainId?: number;
   /** Estimated inference cost in micro-USD. */
   inferenceUsdMicros?: bigint;
   /** Sale price checks. */
@@ -95,7 +97,10 @@ export function evaluate(
 ): Decision {
   let action = proposed;
   const r = policy.rules;
-  const evmVendors = r.crosschain?.approved_vendors ?? [];
+  // Every EVM chain the policy allows, the original first.
+  const chains = [...(r.crosschain ? [r.crosschain] : []), ...(r.crosschain_chains ?? [])];
+  const evmVendors = chains.flatMap((c) => c.approved_vendors);
+  const actionChain = proposed.tool === "request_crosschain_purchase" ? chains.find((c) => c.chain_id === (proposed.chainId ?? r.crosschain?.chain_id)) : undefined;
   // Cross-chain vendors are allowlisted destinations too; addresses compare in lowercase.
   const allowlist = new Set([...r.destinations.allowlist, ...evmVendors]);
   if (action.tool === "request_crosschain_purchase" && action.destination) action = { ...action, destination: action.destination.toLowerCase() };
@@ -134,7 +139,10 @@ export function evaluate(
     if (action.amountUnits === undefined || action.amountUnits <= 0n) {
       return deny(policy, { code: "MISSING_AMOUNT", message: "Fund-moving action has no positive amount" });
     }
-    const businessToken = action.tool === "request_crosschain_purchase" ? r.crosschain?.token : r.token_id;
+    if (action.tool === "request_crosschain_purchase" && !actionChain) {
+      return deny(policy, { code: "CHAIN_NOT_ALLOWED", message: `Chain ${action.chainId ?? "(default)"} is not allowed by the policy` });
+    }
+    const businessToken = action.tool === "request_crosschain_purchase" ? actionChain?.token : r.token_id;
     if (!businessToken || action.tokenId?.toLowerCase() !== businessToken.toLowerCase()) {
       return deny(policy, {
         code: "TOKEN_NOT_ALLOWED",
@@ -148,7 +156,7 @@ export function evaluate(
         true,
       );
     }
-    if (action.tool === "request_crosschain_purchase" && !evmVendors.includes(action.destination)) {
+    if (action.tool === "request_crosschain_purchase" && !actionChain?.approved_vendors.includes(action.destination)) {
       return deny(policy, { code: "VENDOR_NOT_APPROVED", message: `Cross-chain vendor ${action.destination} is not approved` });
     }
     if (action.tool === "request_purchase" || action.tool === "request_crosschain_purchase") {

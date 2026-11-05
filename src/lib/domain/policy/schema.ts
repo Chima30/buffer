@@ -73,6 +73,18 @@ export const policyRulesSchema = z
       })
       .strict()
       .optional(),
+    /** Optional: more EVM chains the treasury may pay vendors on, each with its own token and vendors (policy v6+). */
+    crosschain_chains: z
+      .array(
+        z
+          .object({
+            chain_id: z.number().int().positive(),
+            token: evmAddress,
+            approved_vendors: z.array(evmAddress),
+          })
+          .strict(),
+      )
+      .optional(),
     pricing: z.object({ min_price_units: z.record(z.string(), unitsString) }).strict(),
     revenue: z
       .object({

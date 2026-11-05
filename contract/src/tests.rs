@@ -608,6 +608,7 @@ fn evm_request(c: &mut Contract, vendor: &str, amount: u128, fee: u128) -> Promi
             U128(amount),
             U128(fee),
             U128(GWEI),
+            None,
         )
     })
 }
@@ -677,6 +678,7 @@ fn owner_path_cannot_be_used_by_strangers_to_request() {
         U128(USDC),
         U128(GWEI),
         U128(GWEI),
+        None,
     );
 }
 
@@ -778,8 +780,29 @@ fn migrate_keeps_existing_state() {
         U128(20 * USDC),
         r#"{"subscription_id":"s-1","sku":"brief-subscription","issues":2}"#.into(),
     );
+    as_owner(|| {
+        c.set_product("custom-brief".into(), U128(5 * USDC), U128(3 * USDC), true);
+        c.set_quote_rules(
+            "custom-brief".into(),
+            U128(5 * USDC),
+            U128(50 * USDC),
+            6000,
+            1_800_000_000_000,
+            true,
+        );
+    });
+    testing_env!(ctx(agent()).build());
+    c.create_quote(
+        "q-1".into(),
+        "custom-brief".into(),
+        U128(8 * USDC),
+        U128(USDC),
+        2_000,
+    );
     c.subscription_plans.flush();
     c.subscriptions.flush();
+    c.quote_rules.flush();
+    c.quotes.flush();
     c.products.flush();
     c.vendors.flush();
     c.orders.flush();
@@ -790,7 +813,7 @@ fn migrate_keeps_existing_state() {
         reserve_balance: U128(7),
         ..Treasury::default()
     };
-    // Rebuild the pre-quotes layout from the same collections, write it, then migrate.
+    // Rebuild the pre-multi-chain layout from the same collections, write it, then migrate.
     let Contract {
         owner,
         agent,
@@ -810,9 +833,11 @@ fn migrate_keeps_existing_state() {
         evm_nonce,
         subscription_plans,
         subscriptions,
+        quote_rules,
+        quotes,
         ..
     } = c;
-    let v4 = ContractV4 {
+    let v5 = ContractV5 {
         owner,
         agent,
         token_id,
@@ -834,13 +859,15 @@ fn migrate_keeps_existing_state() {
         treasury: treasury.clone(),
         subscription_plans,
         subscriptions,
+        quote_rules,
+        quotes,
     };
-    env::state_write(&v4);
+    env::state_write(&v5);
     testing_env!(ctx(contract_id()).build());
     let m = Contract::migrate();
     assert_eq!(m.get_config().policy_version, 3);
     assert_eq!(m.get_order("o-1".into()).unwrap().state, OrderState::Paid);
-    assert_eq!(m.get_products().len(), 2);
+    assert_eq!(m.get_products().len(), 3);
     assert!(m.get_evm_config().is_some());
     assert_eq!(m.get_evm_vendors().len(), 1);
     assert_eq!(m.get_evm_purchases("o-1".into()).len(), 1);
@@ -851,8 +878,10 @@ fn migrate_keeps_existing_state() {
         m.get_subscription("s-1".into()).unwrap().escrow.0,
         20 * USDC
     );
-    assert!(m.get_quote_rules().is_empty());
-    assert!(m.get_quote("q-1".into()).is_none());
+    assert_eq!(m.get_quote_rules().len(), 1);
+    assert_eq!(m.get_quote("q-1".into()).unwrap().amount.0, 8 * USDC);
+    assert!(m.get_evm_chains().is_empty());
+    assert_eq!(m.get_evm_chain_nonce(84532), 0);
 }
 
 // ---------- self-funding treasury ----------
@@ -1437,4 +1466,127 @@ fn quote_cap_also_limits_purchases() {
     pay_quote(&mut c, "q-1", 10 * USDC, 2_000);
     let _ =
         as_agent(|| c.request_purchase("q-1".into(), vendor(), U128(3 * USDC), "dataset".into()));
+}
+
+// ---------- more EVM chains ----------
+
+const BASE: u64 = 84532;
+const BASE_USDC: &str = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+
+fn base_setup() -> Contract {
+    let mut c = evm_setup();
+    as_owner(|| {
+        c.set_evm_chain(EvmConfig {
+            mpc_contract: acct("v1.signer-prod.testnet"),
+            chain_id: BASE,
+            usdc: BASE_USDC.into(),
+            max_fee_per_gas_cap: U128(10 * GWEI),
+            gas_limit: 100_000,
+        });
+        c.set_evm_chain_vendor(BASE, EVM_VENDOR.into(), true);
+    });
+    c
+}
+
+fn base_request(c: &mut Contract, amount: u128, fee: u128) -> PromiseOrValue<u32> {
+    as_agent(|| {
+        c.request_evm_purchase(
+            "o-1".into(),
+            EVM_VENDOR.into(),
+            U128(amount),
+            U128(fee),
+            U128(fee),
+            Some(BASE),
+        )
+    })
+}
+
+#[test]
+fn pays_on_another_chain_with_its_own_token_and_nonce() {
+    let mut c = base_setup();
+    assert!(matches!(
+        base_request(&mut c, 5 * USDC, GWEI),
+        PromiseOrValue::Promise(_)
+    ));
+    let p = c.get_evm_purchases("o-1".into())[0].clone();
+    assert_eq!(p.chain_id, BASE);
+    assert_eq!(p.token, BASE_USDC.to_lowercase());
+    assert_eq!(p.nonce, Some(0));
+    assert_eq!(c.get_evm_chain_nonce(BASE), 1);
+    assert_eq!(c.get_evm_nonce(), 0); // the original chain's nonce is untouched
+    // The transaction the MPC network signs is for Base.
+    let tx = c.get_evm_unsigned_tx("o-1".into(), 0).unwrap();
+    assert!(tx.starts_with("02"));
+}
+
+#[test]
+#[should_panic(expected = "evm vendor is not approved")]
+fn vendor_approval_is_per_chain() {
+    let mut c = base_setup();
+    as_owner(|| c.set_evm_chain_vendor(BASE, EVM_VENDOR.into(), false));
+    // Still approved on Sepolia, but not on Base.
+    let _ = base_request(&mut c, USDC, GWEI);
+}
+
+#[test]
+#[should_panic(expected = "max_fee_per_gas above the owner's cap")]
+fn each_chain_has_its_own_fee_cap() {
+    let mut c = base_setup();
+    let _ = base_request(&mut c, USDC, 11 * GWEI); // fine on Sepolia's 100 gwei cap, not on Base's 10
+}
+
+#[test]
+#[should_panic(expected = "chain is not configured")]
+fn unknown_chain_is_refused() {
+    let mut c = base_setup();
+    let _ = as_agent(|| {
+        c.request_evm_purchase(
+            "o-1".into(),
+            EVM_VENDOR.into(),
+            U128(USDC),
+            U128(GWEI),
+            U128(GWEI),
+            Some(421614),
+        )
+    });
+}
+
+#[test]
+fn failed_signature_returns_that_chains_nonce() {
+    let mut c = base_setup();
+    let _ = base_request(&mut c, USDC, GWEI);
+    testing_env!(ctx(contract_id()).build());
+    c.on_evm_signed("o-1".into(), 0, Err(PromiseError::Failed));
+    assert_eq!(c.get_evm_chain_nonce(BASE), 0);
+}
+
+#[test]
+#[should_panic(expected = "owner only")]
+fn only_the_owner_adds_chains() {
+    let mut c = base_setup();
+    as_agent(|| {
+        c.set_evm_chain(EvmConfig {
+            mpc_contract: acct("x.testnet"),
+            chain_id: 1,
+            usdc: BASE_USDC.into(),
+            max_fee_per_gas_cap: U128(1),
+            gas_limit: 21_000,
+        })
+    });
+}
+
+#[test]
+fn expense_cap_counts_every_chain_together() {
+    let mut c = base_setup(); // product cap 13 USDC
+    let _ = evm_request(&mut c, EVM_VENDOR, 6 * USDC, 30 * GWEI);
+    let _ = base_request(&mut c, 7 * USDC, GWEI);
+    assert_eq!(c.get_evm_purchases("o-1".into()).len(), 2);
+}
+
+#[test]
+#[should_panic(expected = "purchase exceeds the order's expense cap")]
+fn expense_cap_is_not_reset_by_switching_chain() {
+    let mut c = base_setup();
+    let _ = evm_request(&mut c, EVM_VENDOR, 6 * USDC, 30 * GWEI);
+    let _ = base_request(&mut c, 7 * USDC + 1, GWEI);
 }

@@ -64,15 +64,15 @@ export async function POST(req: Request) {
       await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_rejected_by_owner", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId });
       recorded.push(e.event);
     } else if (e.event === "evm_purchase_approved") {
-      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_approved", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: { chain: "sepolia" } });
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_approved", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: { chain: "evm" } });
       recorded.push(e.event);
     } else if (e.event === "evm_purchase_signed") {
-      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "crosschain_payment_signed", status: "REAL", txHash, verifiedOnChain: true, counterparty: "NEAR Chain Signatures (MPC)", details: { chain: "sepolia", nonce: e.data.nonce, payload_hash: e.data.payload_hash } });
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "crosschain_payment_signed", status: "REAL", txHash, verifiedOnChain: true, counterparty: "NEAR Chain Signatures (MPC)", details: { chain: "evm", nonce: e.data.nonce, payload_hash: e.data.payload_hash } });
       recorded.push(e.event);
     } else if (e.event === "evm_purchase_rejected") {
-      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_rejected_by_owner", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: { chain: "sepolia" } });
+      await writeLedger({ businessId: business.id, orderId: orderRow?.id, eventType: "purchase_rejected_by_owner", status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: { chain: "evm" } });
       recorded.push(e.event);
-    } else if (e.event === "evm_config_set" || e.event === "evm_vendor_set" || e.event === "evm_nonce_set") {
+    } else if (e.event === "evm_config_set" || e.event === "evm_vendor_set" || e.event === "evm_nonce_set" || e.event === "evm_chain_set") {
       await writeLedger({ businessId: business.id, eventType: e.event, status: "REAL", txHash, verifiedOnChain: true, counterparty: near.ownerAccountId, details: e.data });
       recorded.push(e.event);
     } else if (e.event === "treasury_rules_set" || e.event === "gas_reserve_funded" || e.event === "gas_reserve_withdrawn") {

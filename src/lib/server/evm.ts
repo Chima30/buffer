@@ -7,12 +7,13 @@
  *   1. reads the unsigned transaction and signature from the contract,
  *   2. checks the hash matches and the signature recovers to the treasury,
  *   3. broadcasts the exact signed bytes (re-broadcasting is harmless),
- *   4. verifies the USDC Transfer on Sepolia before anyone treats it as paid.
+ *   4. verifies the USDC Transfer on that chain before anyone treats it as paid.
+ * The same treasury address is used on every EVM chain in ./chains.
  */
 import bs58 from "bs58";
 import { createPublicClient, decodeEventLog, erc20Abi, http, keccak256, parseTransaction, recoverTransactionAddress, serializeTransaction, type Hex, type TransactionSerializableEIP1559 } from "viem";
 import { publicKeyToAddress } from "viem/accounts";
-import { sepolia } from "viem/chains";
+import { chainById, evmChains, type EvmChainInfo } from "./chains";
 import { nearConfig, sepoliaConfig } from "./env";
 import { viewFunction } from "./near-rpc";
 
@@ -38,7 +39,11 @@ export async function treasury(): Promise<`0x${string}`> {
   return treasuryCache;
 }
 
-export const sepoliaClient = () => createPublicClient({ chain: sepolia, transport: http(sepoliaConfig().rpcUrl) });
+export const clientFor = (chainId: number) => {
+  const c = chainById(chainId);
+  return createPublicClient({ chain: c.viem, transport: http(c.rpcUrl) });
+};
+export const sepoliaClient = () => clientFor(11155111);
 
 export interface OnchainEvmPurchase {
   vendor: string;
@@ -58,13 +63,40 @@ export async function getEvmPurchases(onchainOrderId: string): Promise<OnchainEv
   return viewFunction<OnchainEvmPurchase[]>(nearConfig().contractId, "get_evm_purchases", { order_id: onchainOrderId });
 }
 
-export async function getEvmConfig(): Promise<{ chain_id: number; usdc: string; max_fee_per_gas_cap: string; gas_limit: number } | null> {
+export interface OnchainEvmConfig { chain_id: number; usdc: string; max_fee_per_gas_cap: string; gas_limit: number; mpc_contract: string }
+
+export async function getEvmConfig(): Promise<OnchainEvmConfig | null> {
   return viewFunction(nearConfig().contractId, "get_evm_config", {});
 }
 
-/** Current Sepolia fees, clamped to the owner's cap stored in the contract. */
-export async function offerFees(capWei: bigint): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
-  const f = await sepoliaClient().estimateFeesPerGas();
+/** Every chain the contract can pay on: the original one plus extra chains (empty before the multi-chain upgrade). */
+export async function getEvmChainConfigs(): Promise<OnchainEvmConfig[]> {
+  const [first, extra] = await Promise.all([getEvmConfig().catch(() => null), viewFunction<OnchainEvmConfig[]>(nearConfig().contractId, "get_evm_chains", {}).catch(() => [])]);
+  return [...(first ? [first] : []), ...extra];
+}
+
+/** Vendors the contract approves per chain id (lowercase 0x addresses). */
+export async function getEvmVendorApprovals(): Promise<Map<number, Set<string>>> {
+  const out = new Map<number, Set<string>>();
+  const [first, extra, firstVendors] = await Promise.all([
+    getEvmConfig().catch(() => null),
+    viewFunction<[string, boolean][]>(nearConfig().contractId, "get_evm_chain_vendors", {}).catch(() => []),
+    viewFunction<[string, boolean][]>(nearConfig().contractId, "get_evm_vendors", {}).catch(() => []),
+  ]);
+  if (first) out.set(first.chain_id, new Set(firstVendors.filter(([, ok]) => ok).map(([a]) => a.toLowerCase())));
+  for (const [key, ok] of extra) {
+    if (!ok) continue;
+    const [id, addr] = key.split(":");
+    const set = out.get(Number(id)) ?? new Set<string>();
+    set.add(addr.toLowerCase());
+    out.set(Number(id), set);
+  }
+  return out;
+}
+
+/** Current fees on a chain, clamped to the owner's cap stored in the contract. */
+export async function offerFees(capWei: bigint, chainId = 11155111): Promise<{ maxFeePerGas: bigint; maxPriorityFeePerGas: bigint }> {
+  const f = await clientFor(chainId).estimateFeesPerGas();
   const maxFeePerGas = (f.maxFeePerGas * 2n < capWei ? f.maxFeePerGas * 2n : capWei) || 1n;
   const tip = f.maxPriorityFeePerGas ?? 1_000_000_000n;
   return { maxFeePerGas, maxPriorityFeePerGas: tip < maxFeePerGas ? tip : maxFeePerGas };
@@ -90,8 +122,8 @@ export function assembleSigned(unsignedHex: string, p: OnchainEvmPurchase, expec
 }
 
 /** Sends the signed bytes. Safe to repeat: the same bytes have the same hash and can only be mined once. */
-export async function broadcast(raw: Hex, hash: Hex): Promise<Hex> {
-  const client = sepoliaClient();
+export async function broadcast(raw: Hex, hash: Hex, chainId = 11155111): Promise<Hex> {
+  const client = clientFor(chainId);
   try {
     const sent = await client.sendRawTransaction({ serializedTransaction: raw });
     if (sent.toLowerCase() !== hash.toLowerCase()) throw new Error(`Node returned hash ${sent}, expected ${hash}`);
@@ -106,11 +138,12 @@ export async function broadcast(raw: Hex, hash: Hex): Promise<Hex> {
 export type TransferCheck = { state: "CONFIRMED"; blockNumber: bigint } | { state: "PENDING" } | { state: "FAILED"; reason: string };
 
 /** A payment is real only when its receipt succeeded and carries the exact USDC Transfer. */
-export async function verifyUsdcTransfer(hash: Hex, p: { token: string; from: string; to: string; amount: bigint }): Promise<TransferCheck> {
-  const client = sepoliaClient();
+export async function verifyUsdcTransfer(hash: Hex, p: { token: string; from: string; to: string; amount: bigint; chainId?: number }): Promise<TransferCheck> {
+  const chainId = p.chainId ?? 11155111;
+  const client = clientFor(chainId);
   const receipt = await client.getTransactionReceipt({ hash }).catch(() => null);
   if (!receipt) return { state: "PENDING" };
-  if (receipt.status !== "success") return { state: "FAILED", reason: "Transaction reverted on Sepolia" };
+  if (receipt.status !== "success") return { state: "FAILED", reason: `Transaction reverted on ${chainById(chainId).name}` };
   const ok = receipt.logs.some((log) => {
     if (log.address.toLowerCase() !== p.token.toLowerCase()) return false;
     try {
@@ -123,14 +156,22 @@ export async function verifyUsdcTransfer(hash: Hex, p: { token: string; from: st
   return ok ? { state: "CONFIRMED", blockNumber: receipt.blockNumber } : { state: "FAILED", reason: "No matching USDC Transfer in the receipt" };
 }
 
-export async function treasuryBalances(): Promise<{ address: string; eth: bigint; usdc: bigint } | null> {
-  const cfg = await getEvmConfig();
-  if (!cfg) return null;
+export async function treasuryBalances(chainId = 11155111): Promise<{ address: string; eth: bigint; usdc: bigint } | null> {
+  const c = chainById(chainId);
   const address = await treasury();
-  const client = sepoliaClient();
+  const client = clientFor(chainId);
   const [eth, usdc] = await Promise.all([
     client.getBalance({ address }),
-    client.readContract({ address: cfg.usdc as Hex, abi: erc20Abi, functionName: "balanceOf", args: [address] }),
+    client.readContract({ address: c.usdc as Hex, abi: erc20Abi, functionName: "balanceOf", args: [address] }),
   ]);
   return { address, eth, usdc };
+}
+
+/** Treasury balances on every known EVM chain; a chain whose RPC fails is reported as null. */
+export async function treasuryBalancesAll(): Promise<{ chain: EvmChainInfo; eth: bigint; usdc: bigint } [] > {
+  const rows = await Promise.all(evmChains().map(async (chain) => {
+    const b = await treasuryBalances(chain.chainId).catch(() => null);
+    return b ? { chain, eth: b.eth, usdc: b.usdc } : null;
+  }));
+  return rows.filter((r): r is { chain: EvmChainInfo; eth: bigint; usdc: bigint } => r !== null);
 }

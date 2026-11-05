@@ -41,7 +41,10 @@ const STAGES: { key: string; label: string; states: string[] }[] = [
   { key: "settle", label: "Settled", states: ["SETTLED"] },
 ];
 
+const CHAIN_NAMES: Record<string, string> = { near: "NEAR", sepolia: "Ethereum Sepolia", "base-sepolia": "Base Sepolia", "arbitrum-sepolia": "Arbitrum Sepolia" };
+
 const EVENT_LABELS: Record<string, string> = {
+  vendor_bids: "Vendor prices compared",
   payment_received: "Customer payment received",
   quote_created: "Quote registered on-chain",
   issue_started: "Issue opened from the subscription escrow",
@@ -152,6 +155,7 @@ export function OrderView() {
               )}
             </div>
             <div className="space-y-6">
+              <Bids entries={order.ledger} />
               <Ledger entries={order.ledger} />
               {order.proofs.length > 0 && <Proofs proofs={order.proofs} reportHash={order.report?.content_hash ?? null} />}
             </div>
@@ -346,6 +350,41 @@ function Report({ report }: { report: { content: string; content_hash: string } 
   );
 }
 
+interface BidRow { vendorId: string; vendor: string; chainName: string; priceUnits: string; gasUnits: string; totalUnits: string; status: "eligible" | "skipped" | "won"; reason: string | null; needsApproval: boolean }
+
+/** The vendor competition behind a purchase: every bid, the winner, and why the rest lost. */
+function Bids({ entries }: { entries: OrderData["ledger"] }) {
+  const e = entries.find((x) => x.event_type === "vendor_bids");
+  const bids = (e?.details?.bids as BidRow[] | undefined) ?? [];
+  if (!e || bids.length === 0) return null;
+  const order = [...bids].sort((a, b) => (a.status === "won" ? -1 : b.status === "won" ? 1 : a.status === "skipped" ? 1 : b.status === "skipped" ? -1 : Number(BigInt(a.totalUnits) - BigInt(b.totalUnits))));
+  return (
+    <Card title="Vendor bids">
+      <ul className="divide-y divide-rule text-sm">
+        {order.map((b) => (
+          <li key={b.vendorId} className={`py-2.5 ${b.status === "skipped" ? "opacity-60" : ""}`}>
+            <div className="flex items-baseline justify-between gap-2">
+              <span>
+                {b.vendor} <span className="text-xs text-ink-3">· {b.chainName}</span>
+              </span>
+              {b.status === "skipped" ? <span className="text-xs text-ink-3">skipped</span> : <Money units={b.totalUnits} />}
+            </div>
+            {b.status === "skipped" ? (
+              <p className="text-xs text-ink-3">{b.reason}</p>
+            ) : (
+              <p className="text-xs text-ink-3">
+                price <Money units={b.priceUnits} /> + gas <Money units={b.gasUnits} />
+                {b.status === "won" && <span className="text-real"> · cheapest, bought{b.needsApproval ? " after owner approval" : ""}</span>}
+              </p>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-3 text-xs text-ink-3">Prices for {String(e.details.hour ?? "this hour")}. Gas valued at {Number(e.details.eth_usd ?? 0).toFixed(0)} USD/ETH ({String(e.details.eth_usd_source ?? "")}). The cheapest total within the owner&apos;s limits wins; code decides, not the AI.</p>
+    </Card>
+  );
+}
+
 function Ledger({ entries }: { entries: OrderData["ledger"] }) {
   return (
     <Card title="Order ledger">
@@ -359,7 +398,7 @@ function Ledger({ entries }: { entries: OrderData["ledger"] }) {
             <li key={i} className={`flex flex-col gap-1 py-2.5 ${resolved ? "opacity-60" : ""}`}>
               <div className="flex items-center justify-between gap-2">
                 <span>
-                  {e.event_type === "vendor_paid" && e.details?.chain === "sepolia" ? "Vendor paid on Ethereum Sepolia (Chain Signatures)" : (EVENT_LABELS[e.event_type] ?? e.event_type)}
+                  {e.event_type === "vendor_paid" && typeof e.details?.chain === "string" && e.details.chain !== "near" ? `Vendor paid on ${CHAIN_NAMES[e.details.chain] ?? e.details.chain} (Chain Signatures)` : (EVENT_LABELS[e.event_type] ?? e.event_type)}
                 </span>
                 <StatusBadge status={e.status} />
               </div>

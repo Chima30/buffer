@@ -181,3 +181,42 @@ describe("cross-chain purchases (policy v3)", async () => {
     expect(policyHash(v3)).not.toBe(policyHash(policy));
   });
 });
+
+describe("more EVM chains (policy v6)", async () => {
+  const { withCrosschain, withMoreChains } = await import("./defaults");
+  const SEPOLIA_USDC = "0x1c7d4b196cb0c7b01d743fbc6116a902379c7238";
+  const BASE_USDC = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+  const VENDOR = "0x8fcf5415cc8c338d4523be5a04bb758b5437810f";
+  const v3 = withCrosschain(policy, { agentId: "agent-1", vendorId: "vendor-evm", chainId: 11155111, token: SEPOLIA_USDC, evmVendor: VENDOR });
+  const v6 = withMoreChains(v3, [{ chainId: 84532, token: BASE_USDC, vendor: VENDOR, vendorId: "vendor-base" }]);
+  const base = (over: Partial<ProposedAction> = {}): ProposedAction => ({
+    tool: "request_crosschain_purchase",
+    agentId: "agent-1",
+    orderId: "o-1",
+    amountUnits: toUnits("5"),
+    tokenId: BASE_USDC,
+    destination: VENDOR,
+    vendorId: "vendor-base",
+    chainId: 84532,
+    ...over,
+  });
+
+  it("allows the approved vendor on Base in Base USDC", () => {
+    expect(evaluate(v6, base(), ctx).outcome).toBe("allow");
+  });
+  it("refuses Sepolia USDC on Base", () => {
+    expect(evaluate(v6, base({ tokenId: SEPOLIA_USDC }), ctx).reasons[0].code).toBe("TOKEN_NOT_ALLOWED");
+  });
+  it("refuses a chain the policy does not list", () => {
+    expect(evaluate(v6, base({ chainId: 421614 }), ctx).reasons[0].code).toBe("CHAIN_NOT_ALLOWED");
+  });
+  it("refuses Base under v3", () => {
+    expect(evaluate(v3, base(), ctx).reasons[0].code).toBe("CHAIN_NOT_ALLOWED");
+  });
+  it("keeps the original chain working without a chain id", () => {
+    expect(evaluate(v6, base({ chainId: undefined, tokenId: SEPOLIA_USDC, vendorId: "vendor-evm" }), ctx).outcome).toBe("allow");
+  });
+  it("is idempotent", () => {
+    expect(withMoreChains(v6, [{ chainId: 84532, token: BASE_USDC, vendor: VENDOR, vendorId: "vendor-base" }]).rules).toEqual(v6.rules);
+  });
+});

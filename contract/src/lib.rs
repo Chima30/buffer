@@ -49,6 +49,11 @@
 //! contract refuses any quote outside the owner's rules: price within
 //! [min_price, max_price], and an expense cap of at most `max_expense_bps` of the
 //! price. That per-order cap replaces the product's cap everywhere above.
+//!
+//! More EVM chains: the same treasury address (one MPC-derived key) pays on
+//! every EVM chain. Each extra chain has its own owner-set config, its own vendor
+//! approvals and its own nonce. The agent names the chain and the vendor; which
+//! chains, which vendors, the fee cap and the gas limit are the owner's.
 
 pub mod evm;
 
@@ -112,6 +117,10 @@ enum StorageKey {
     // Appended in the quotes upgrade.
     QuoteRules,
     Quotes,
+    // Appended in the multi-chain upgrade.
+    EvmChains,
+    EvmChainVendors,
+    EvmChainNonces,
 }
 
 #[near(serializers = [json, borsh])]
@@ -500,6 +509,12 @@ pub struct Contract {
     // ---- quotes upgrade (appended; see `migrate`) ----
     quote_rules: IterableMap<String, QuoteRules>,
     quotes: LookupMap<String, Quote>,
+    // ---- multi-chain upgrade (appended; see `migrate`) ----
+    /// EVM chains besides the original one in `evm`, by chain id.
+    evm_chains: IterableMap<u64, EvmConfig>,
+    /// "<chain_id>:<0xvendor>" -> approved, for chains in `evm_chains`.
+    evm_chain_vendors: IterableMap<String, bool>,
+    evm_chain_nonces: LookupMap<u64, u64>,
 }
 
 /// Self-funding treasury state and the owner's rules for it.
@@ -522,9 +537,9 @@ pub struct Treasury {
     pub gas_spent_week: U128,
 }
 
-/// State layout before the quotes upgrade, read once by `migrate`.
+/// State layout before the multi-chain upgrade, read once by `migrate`.
 #[near(serializers = [borsh])]
-pub(crate) struct ContractV4 {
+pub(crate) struct ContractV5 {
     owner: AccountId,
     agent: AccountId,
     token_id: AccountId,
@@ -546,6 +561,8 @@ pub(crate) struct ContractV4 {
     treasury: Treasury,
     subscription_plans: IterableMap<String, SubscriptionPlan>,
     subscriptions: LookupMap<String, Subscription>,
+    quote_rules: IterableMap<String, QuoteRules>,
+    quotes: LookupMap<String, Quote>,
 }
 
 fn emit(event: &str, data: serde_json::Value) {
@@ -601,18 +618,22 @@ impl Contract {
             subscriptions: LookupMap::new(StorageKey::Subscriptions),
             quote_rules: IterableMap::new(StorageKey::QuoteRules),
             quotes: LookupMap::new(StorageKey::Quotes),
+            evm_chains: IterableMap::new(StorageKey::EvmChains),
+            evm_chain_vendors: IterableMap::new(StorageKey::EvmChainVendors),
+            evm_chain_nonces: LookupMap::new(StorageKey::EvmChainNonces),
         };
         c.assert_config_valid();
         c
     }
 
-    /// One-time upgrade from the subscriptions layout. Keeps every existing field,
-    /// order, purchase, settlement, the treasury and subscriptions; adds empty quotes.
+    /// One-time upgrade from the quotes layout. Keeps every existing field, order,
+    /// purchase, settlement, the treasury, subscriptions and quotes; adds empty
+    /// extra EVM chains.
     #[private]
     #[init(ignore_state)]
     pub fn migrate() -> Self {
-        let old: ContractV4 = env::state_read().expect("no prior state");
-        emit("migrated", serde_json::json!({ "to": "quotes" }));
+        let old: ContractV5 = env::state_read().expect("no prior state");
+        emit("migrated", serde_json::json!({ "to": "multichain" }));
         Self {
             owner: old.owner,
             agent: old.agent,
@@ -635,8 +656,11 @@ impl Contract {
             treasury: old.treasury,
             subscription_plans: old.subscription_plans,
             subscriptions: old.subscriptions,
-            quote_rules: IterableMap::new(StorageKey::QuoteRules),
-            quotes: LookupMap::new(StorageKey::Quotes),
+            quote_rules: old.quote_rules,
+            quotes: old.quotes,
+            evm_chains: IterableMap::new(StorageKey::EvmChains),
+            evm_chain_vendors: IterableMap::new(StorageKey::EvmChainVendors),
+            evm_chain_nonces: LookupMap::new(StorageKey::EvmChainNonces),
         }
     }
 
@@ -809,6 +833,51 @@ impl Contract {
     }
 
     /// Resync the treasury nonce, e.g. after a signed transaction was never mined.
+    /// Adds or updates another EVM chain the treasury may pay on.
+    pub fn set_evm_chain(&mut self, config: EvmConfig) {
+        self.assert_owner();
+        require!(
+            self.evm.as_ref().map(|c| c.chain_id) != Some(config.chain_id),
+            "use set_evm_config for the original chain"
+        );
+        require!(
+            evm::parse_address(&config.usdc).is_some(),
+            "usdc must be a 0x address"
+        );
+        require!(
+            config.gas_limit >= 21_000 && config.gas_limit <= 500_000,
+            "gas_limit out of range"
+        );
+        require!(config.max_fee_per_gas_cap.0 > 0, "fee cap must be positive");
+        let mut config = config;
+        config.usdc = config.usdc.to_lowercase();
+        emit("evm_chain_set", serde_json::json!({ "config": config }));
+        self.evm_chains.insert(config.chain_id, config);
+    }
+
+    pub fn set_evm_chain_vendor(&mut self, chain_id: u64, vendor: String, approved: bool) {
+        self.assert_owner();
+        require!(self.evm_chains.contains_key(&chain_id), "unknown chain");
+        let a = evm::parse_address(&vendor).expect("vendor must be a 0x address");
+        let key = format!("{chain_id}:{}", evm::address_string(&a));
+        self.evm_chain_vendors.insert(key.clone(), approved);
+        emit(
+            "evm_vendor_set",
+            serde_json::json!({ "chain_id": chain_id, "vendor": evm::address_string(&a), "approved": approved }),
+        );
+    }
+
+    /// Resyncs one chain's nonce with the treasury's on-chain count.
+    pub fn set_evm_chain_nonce(&mut self, chain_id: u64, nonce: u64) {
+        self.assert_owner();
+        require!(self.evm_chains.contains_key(&chain_id), "unknown chain");
+        self.evm_chain_nonces.insert(chain_id, nonce);
+        emit(
+            "evm_nonce_set",
+            serde_json::json!({ "chain_id": chain_id, "nonce": nonce }),
+        );
+    }
+
     pub fn set_evm_nonce(&mut self, nonce: u64) {
         self.assert_owner();
         self.evm_nonce = nonce;
@@ -1259,18 +1328,16 @@ impl Contract {
         amount: U128,
         max_fee_per_gas: U128,
         max_priority_fee_per_gas: U128,
+        chain_id: Option<u64>,
     ) -> PromiseOrValue<u32> {
         self.assert_agent();
         require!(!self.paused, "paused");
-        let cfg = self
-            .evm
-            .clone()
-            .expect("cross-chain purchases are not configured");
+        let cfg = self.chain_config(chain_id);
         require!(amount.0 > 0, "amount must be positive");
         let vendor =
             evm::address_string(&evm::parse_address(&vendor).expect("vendor must be a 0x address"));
         require!(
-            self.evm_vendors.get(&vendor).copied().unwrap_or(false),
+            self.evm_vendor_approved(cfg.chain_id, &vendor),
             "evm vendor is not approved"
         );
         require!(
@@ -1339,10 +1406,13 @@ impl Contract {
     pub fn approve_evm_purchase(&mut self, order_id: String, index: u32) -> Promise {
         self.assert_owner();
         require!(!self.paused, "paused");
-        let cfg = self
-            .evm
-            .clone()
-            .expect("cross-chain purchases are not configured");
+        let chain_id = self
+            .evm_purchases
+            .get(&order_id)
+            .and_then(|l| l.get(index as usize))
+            .map(|p| p.chain_id)
+            .expect("no such evm purchase");
+        let cfg = self.chain_config(Some(chain_id));
         let order = self.order_or_panic(&order_id);
         require!(
             order.state == OrderState::Paid,
@@ -1358,10 +1428,8 @@ impl Contract {
             p.status == EvmPurchaseStatus::AwaitingApproval,
             "evm purchase is not awaiting approval"
         );
-        require!(
-            self.evm_vendors.get(&p.vendor).copied().unwrap_or(false),
-            "evm vendor is no longer approved"
-        );
+        let still_approved = self.evm_vendor_approved(p.chain_id, &p.vendor);
+        require!(still_approved, "evm vendor is no longer approved");
         p.status = EvmPurchaseStatus::Signing;
         self.evm_purchases.insert(order_id.clone(), list);
         emit(
@@ -1429,8 +1497,8 @@ impl Contract {
             None => {
                 p.status = EvmPurchaseStatus::Failed;
                 // Give the nonce back if nothing was signed after it.
-                if p.nonce == Some(self.evm_nonce.saturating_sub(1)) {
-                    self.evm_nonce -= 1;
+                if let Some(n) = p.nonce {
+                    self.give_back_nonce(p.chain_id, n);
                 }
                 self.evm_purchases.insert(order_id.clone(), list);
                 emit(
@@ -1997,6 +2065,21 @@ impl Contract {
             .collect()
     }
 
+    pub fn get_evm_chains(&self) -> Vec<EvmConfig> {
+        self.evm_chains.values().cloned().collect()
+    }
+
+    pub fn get_evm_chain_vendors(&self) -> Vec<(String, bool)> {
+        self.evm_chain_vendors
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect()
+    }
+
+    pub fn get_evm_chain_nonce(&self, chain_id: u64) -> u64 {
+        self.evm_chain_nonces.get(&chain_id).copied().unwrap_or(0)
+    }
+
     pub fn get_evm_nonce(&self) -> u64 {
         self.evm_nonce
     }
@@ -2155,8 +2238,7 @@ impl Contract {
             .cloned()
             .expect("no evm purchases");
         let p = list.get_mut(index as usize).expect("no such evm purchase");
-        let nonce = self.evm_nonce;
-        self.evm_nonce += 1;
+        let nonce = self.take_nonce(p.chain_id);
         let hash = env::keccak256(&evm::unsigned_eip1559(&Self::evm_tx(p, nonce)));
         let hash_hex = evm::to_hex(&hash);
         p.nonce = Some(nonce);
@@ -2182,6 +2264,59 @@ impl Contract {
     }
 
     /// NEAR purchases plus cross-chain purchases that count against the cap.
+    /// The original chain (`evm`) when `chain_id` is None or its id; otherwise an extra chain.
+    fn chain_config(&self, chain_id: Option<u64>) -> EvmConfig {
+        let original = self.evm.clone();
+        match (chain_id, original) {
+            (None, Some(c)) => c,
+            (Some(id), Some(c)) if id == c.chain_id => c,
+            (Some(id), _) => self
+                .evm_chains
+                .get(&id)
+                .cloned()
+                .unwrap_or_else(|| env::panic_str("chain is not configured")),
+            (None, None) => env::panic_str("cross-chain purchases are not configured"),
+        }
+    }
+
+    fn is_original_chain(&self, chain_id: u64) -> bool {
+        self.evm.as_ref().map(|c| c.chain_id) == Some(chain_id)
+    }
+
+    fn evm_vendor_approved(&self, chain_id: u64, vendor: &str) -> bool {
+        if self.is_original_chain(chain_id) {
+            self.evm_vendors.get(vendor).copied().unwrap_or(false)
+        } else {
+            self.evm_chain_vendors
+                .get(&format!("{chain_id}:{vendor}"))
+                .copied()
+                .unwrap_or(false)
+        }
+    }
+
+    fn take_nonce(&mut self, chain_id: u64) -> u64 {
+        if self.is_original_chain(chain_id) {
+            let n = self.evm_nonce;
+            self.evm_nonce += 1;
+            n
+        } else {
+            let n = self.evm_chain_nonces.get(&chain_id).copied().unwrap_or(0);
+            self.evm_chain_nonces.insert(chain_id, n + 1);
+            n
+        }
+    }
+
+    /// Gives a nonce back if nothing was signed after it on that chain.
+    fn give_back_nonce(&mut self, chain_id: u64, n: u64) {
+        if self.is_original_chain(chain_id) {
+            if self.evm_nonce == n + 1 {
+                self.evm_nonce = n;
+            }
+        } else if self.evm_chain_nonces.get(&chain_id).copied() == Some(n + 1) {
+            self.evm_chain_nonces.insert(chain_id, n);
+        }
+    }
+
     /// An order's expense cap: its quote's, or else its product's.
     fn expense_cap(&self, order_id: &str, order: &Order) -> u128 {
         match self.quotes.get(order_id) {

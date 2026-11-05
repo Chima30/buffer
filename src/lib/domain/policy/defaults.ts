@@ -84,3 +84,36 @@ export function withCrosschain(current: PolicyDocument, params: { agentId: strin
   }
   return next;
 }
+
+/**
+ * Next policy version allowing purchases on more EVM chains: each chain's USDC,
+ * its approved vendor addresses, and the vendor rows those purchases come from.
+ * Returns the rules unchanged (same version) when nothing is new.
+ */
+export function withMoreChains(current: PolicyDocument, chains: { chainId: number; token: string; vendor: string; vendorId: string }[]): PolicyDocument {
+  const next: PolicyDocument = structuredClone(current);
+  const r = next.rules;
+  let changed = false;
+  for (const c of chains) {
+    const list = (r.crosschain_chains ??= []);
+    const token = c.token.toLowerCase();
+    const vendor = c.vendor.toLowerCase();
+    let entry = list.find((x) => x.chain_id === c.chainId);
+    if (!entry) {
+      entry = { chain_id: c.chainId, token, approved_vendors: [] };
+      list.push(entry);
+      changed = true;
+    }
+    if (!entry.approved_vendors.includes(vendor)) {
+      entry.approved_vendors.push(vendor);
+      changed = true;
+    }
+    if (!r.procurement.approved_vendor_ids.includes(c.vendorId)) {
+      r.procurement.approved_vendor_ids.push(c.vendorId);
+      changed = true;
+    }
+  }
+  if (!changed) return current;
+  next.version = current.version + 1;
+  return next;
+}
