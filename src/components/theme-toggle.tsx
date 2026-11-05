@@ -41,5 +41,46 @@ export function ThemeToggle({ className = "" }: { className?: string }) {
   );
 }
 
+function applyTheme(t: "light" | "dark") {
+  const html = document.documentElement;
+  html.classList.add("theme-tween");
+  html.setAttribute("data-theme", t);
+  try {
+    localStorage.setItem("buffer-theme", t);
+  } catch {
+    /* private mode: the choice lasts for this page only */
+  }
+  window.setTimeout(() => html.classList.remove("theme-tween"), 260);
+}
+
+/** Sidebar footer switch: Light | Dark, with a sliding thumb. */
+export function ThemeSwitch() {
+  const theme = useSyncExternalStore(subscribe, current, () => "dark");
+  const set = (t: "light" | "dark") => {
+    if (t !== theme) applyTheme(t);
+  };
+  return (
+    <div role="radiogroup" aria-label="Colour theme" className="relative grid h-9 grid-cols-2 rounded-lg border border-rule bg-raised p-0.5 text-xs">
+      <span
+        aria-hidden
+        className={`absolute inset-y-0.5 left-0.5 w-[calc(50%-2px)] rounded-md bg-surface shadow-[var(--shadow-float)] transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${theme === "dark" ? "translate-x-full" : ""}`}
+      />
+      {(["light", "dark"] as const).map((t) => (
+        <button
+          key={t}
+          type="button"
+          role="radio"
+          aria-checked={theme === t}
+          onClick={() => set(t)}
+          className={`relative z-10 flex items-center justify-center gap-1.5 rounded-md transition-colors duration-200 ${theme === t ? "text-ink" : "text-ink-3 hover:text-ink-2"}`}
+        >
+          {t === "light" ? <Sun size={14} strokeWidth={1.6} /> : <Moon size={14} strokeWidth={1.6} />}
+          {t === "light" ? "Light" : "Dark"}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 /** Runs before paint so the page never flashes the wrong theme. */
 export const themeScript = `(function(){try{var t=localStorage.getItem("buffer-theme");if(t!=="light"&&t!=="dark"){t=window.matchMedia("(prefers-color-scheme: light)").matches?"light":"dark"}document.documentElement.dataset.theme=t}catch(e){document.documentElement.dataset.theme="dark"}})();`;

@@ -4,10 +4,13 @@ import Link from "next/link";
 import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
 import { MoneyFlow } from "@/components/money-flow";
+import { LiveDot, LivePill, Sparkline } from "@/components/live";
+import { BadgeCheck, CircleDollarSign, PiggyBank, Radio } from "lucide-react";
 import { txHashOf, useNearWallet } from "@/components/wallet";
 import { sessionHeaders, signInWithWallet } from "@/lib/client/session";
 
 interface Overview {
+  kpis: { days: string[]; revenueByDay: number[]; settledByDay: number[]; settledOrders: number; readAt: string };
   business: { id: string; name: string; status: "active" | "paused" } | null;
   contract: { id: string; paused: boolean; owner: string; policyVersion: number; policyHash: string | null; approvalAboveUnits: string; contributor: string; contributorBps: number };
   policy: { version: number; rules_hash: string; source_text: string | null; activated_at: string | null; values: Record<string, string> | null } | null;
@@ -216,7 +219,7 @@ export default function OwnerConsole() {
           <p className="text-sm text-ink-3">Owner console</p>
           <h1 className="mt-1 text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{data?.business?.name ?? "Business"}</h1>
         </div>
-        {data && <StatusPill paused={data.contract.paused} agent={data.agent?.status ?? "paused"} />}
+        {data && <LivePill tone={!data.contract.paused && data.agent?.status === "running" ? "live" : "warn"}>{!data.contract.paused && data.agent?.status === "running" ? "Live on NEAR testnet" : data.contract.paused ? "Paused" : `Agent ${data.agent?.status}`}</LivePill>}
       </div>
 
       {!wallet.signedAccountId && <Banner tone="simulated">Anyone can view this console; only the owner can act. Every change is a transaction the contract accepts from the owner account alone. Connect the owner wallet to act.</Banner>}
@@ -224,7 +227,18 @@ export default function OwnerConsole() {
       {notice && <Banner tone={notice.tone}>{notice.text}</Banner>}
       {error && <Banner tone="failed">{error}</Banner>}
       {data?.alerts.map((a) => <Banner key={a} tone="pending">Low balance: {a}</Banner>)}
-      {!data && !error && <p className="mt-8 text-ink-3">Loading…</p>}
+      {!data && !error && (
+        <div aria-label="Loading the console" className="mt-6 space-y-6">
+          <div className="skeleton h-11" />
+          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => <div key={i} className="skeleton h-32" />)}
+          </div>
+          <div className="grid gap-4 lg:grid-cols-[1.5fr_1fr]">
+            <div className="skeleton h-72" />
+            <div className="skeleton h-72" />
+          </div>
+        </div>
+      )}
 
       {data && (
         <TabContext.Provider value={tab}>
@@ -246,31 +260,75 @@ export default function OwnerConsole() {
             </ul>
           </nav>
           {tab === "overview" && (
-          <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
-            {(() => {
-              const r = BigInt(data.totals.revenue), v = BigInt(data.totals.vendorSpend), ai = BigInt(data.totals.inferenceSpend), c = BigInt(data.totals.contributorPaid), kept = BigInt(data.totals.reserveKept ?? "0");
-              const owner = r - v - ai - c - kept;
-              if (r <= 0n || owner < 0n) return null;
-              return (
-                <MoneyFlow
-                  title="Where all revenue went"
-                  sourceLabel="Customers paid"
-                  caption={<>Net revenue is split {100 - data.contract.contributorBps / 100}/{data.contract.contributorBps / 100} between owner and contributor, after costs</>}
-                  groups={[
-                    { label: "Costs", leaves: [{ label: "Data vendors", units: v, color: "chain" }, { label: "AI inference", units: ai, color: "ai" }] },
-                    { label: "Net revenue", leaves: [{ label: "Owner", units: owner, color: "owner", note: "Includes orders not settled yet" }, { label: "Contributor", units: c, color: "contrib" }, ...(kept > 0n ? [{ label: "Business reserve", units: kept, color: "vendor" as const, note: "Kept to pay the business's own bills" }] : [])] },
-                  ]}
-                />
-              );
-            })()}
-            <section className="grid grid-cols-2 gap-3 lg:grid-cols-1 lg:content-start">
-              <Stat label="Revenue received" units={data.totals.revenue} />
-              <Stat label="Paid to vendors" units={data.totals.vendorSpend} />
-              <Stat label="Paid to owner" units={data.totals.ownerPaid} />
-              <Stat label="Paid to contributor" units={data.totals.contributorPaid} />
-            </section>
-          </div>
+            <>
+              <section className="stagger mt-6 grid grid-cols-2 gap-3 xl:grid-cols-4">
+                {(() => {
+                  const k = data.kpis;
+                  const week = (xs: number[], from: number) => xs.slice(from, from + 7).reduce((a, b) => a + b, 0);
+                  const thisWeek = week(k.revenueByDay, 7), lastWeek = week(k.revenueByDay, 0);
+                  const delta = lastWeek > 0 ? Math.round(((thisWeek - lastWeek) / lastWeek) * 100) : null;
+                  const t = data.businessTreasury;
+                  const live = !data.contract.paused && data.agent?.status === "running";
+                  return (
+                    <>
+                      <Kpi icon={CircleDollarSign} label="Revenue received" value={<Money units={data.totals.revenue} />} foot={delta === null ? "Last 14 days" : <span className={delta >= 0 ? "text-real" : "text-failed"}>{delta >= 0 ? "↑" : "↓"} {Math.abs(delta)}% vs last week</span>} spark={k.revenueByDay} />
+                      <Kpi icon={BadgeCheck} label="Orders settled" value={<span className="font-mono tabular">{k.settledOrders}</span>} foot="Paid out 70/30 on-chain" spark={k.settledByDay} />
+                      <Kpi icon={PiggyBank} label="Business reserve" value={t ? <Money units={t.reserve_balance} /> : "—"} foot={t && BigInt(t.reserve_target) > 0n ? <span>Target <Money units={t.reserve_target} /></span> : "Not set"} progress={t && BigInt(t.reserve_target) > 0n ? Number((BigInt(t.reserve_balance) * 100n) / BigInt(t.reserve_target)) : null} />
+                      <Kpi icon={Radio} label="Business status" value={<span className={live ? "text-real" : "text-pending"}>{live ? "Live" : data.contract.paused ? "Paused" : "Agent " + (data.agent?.status ?? "off")}</span>} foot={<span className="flex items-center gap-1.5"><LiveDot tone={live ? "live" : "warn"} /> Read from NEAR at {new Date(k.readAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</span>} glow={live} />
+                    </>
+                  );
+                })()}
+              </section>
 
+              <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
+            {(() => {
+                  const r = BigInt(data.totals.revenue), v = BigInt(data.totals.vendorSpend), ai = BigInt(data.totals.inferenceSpend), c = BigInt(data.totals.contributorPaid), kept = BigInt(data.totals.reserveKept ?? "0");
+                  const owner = r - v - ai - c - kept;
+                  if (r <= 0n || owner < 0n) return null;
+                  return (
+                    <MoneyFlow
+                      title="Where all revenue went"
+                      sourceLabel="Customers paid"
+                      caption={<>Net revenue is split {100 - data.contract.contributorBps / 100}/{data.contract.contributorBps / 100} between owner and contributor, after costs</>}
+                      groups={[
+                        { label: "Costs", leaves: [{ label: "Data vendors", units: v, color: "chain" }, { label: "AI inference", units: ai, color: "ai" }] },
+                        { label: "Net revenue", leaves: [{ label: "Owner", units: owner, color: "owner", note: "Includes orders not settled yet" }, { label: "Contributor", units: c, color: "contrib" }, ...(kept > 0n ? [{ label: "Business reserve", units: kept, color: "vendor" as const, note: "Kept to pay the business's own bills" }] : [])] },
+                      ]}
+                    />
+                  );
+                })()}
+                <section className="lift rounded-[var(--radius-card)] border border-rule bg-surface">
+                  <h2 className="flex items-center justify-between border-b border-rule px-5 py-3 font-medium">
+                    Business health
+                    <LivePill tone={!data.contract.paused && data.agent?.status === "running" ? "live" : "warn"}>{!data.contract.paused && data.agent?.status === "running" ? "Live" : "Check"}</LivePill>
+                  </h2>
+                  <table className="w-full text-sm">
+                    <tbody className="divide-y divide-rule">
+                      {(
+                        [
+                          ["Contract", data.contract.id, data.contract.paused ? "Paused" : "Taking orders", data.contract.paused ? "warn" : "live"],
+                          ["Agent wallet", "OutLayer TEE custody", data.agent?.status === "running" ? "Running" : (data.agent?.status ?? "—"), data.agent?.status === "running" ? "live" : "warn"],
+                          ["Policy", `v${data.contract.policyVersion}`, data.policyAnchored ? "Anchored" : "Half-signed", data.policyAnchored ? "live" : "warn"],
+                          ["Agent gas", data.businessTreasury ? `${yocto(data.businessTreasury.agentGasYocto).toFixed(2)} NEAR` : "—", data.businessTreasury && yocto(data.businessTreasury.agentGasYocto) >= 1 ? "Funded" : "Low", data.businessTreasury && yocto(data.businessTreasury.agentGasYocto) >= 1 ? "live" : "warn"],
+                          ["Approvals", `${data.pendingApprovals.length} waiting`, data.pendingApprovals.length ? "Needs you" : "Clear", data.pendingApprovals.length ? "warn" : "live"],
+                          ["Refunds", `${data.refunds.length} open`, data.refunds.length ? "Needs you" : "Clear", data.refunds.length ? "warn" : "live"],
+                        ] as [string, string, string, "live" | "warn"][]
+                      ).map(([k, sub, v, tone]) => (
+                        <tr key={k}>
+                          <td className="px-5 py-2.5">
+                            <div>{k}</div>
+                            <div className="truncate font-mono text-[11px] text-ink-3">{sub}</div>
+                          </td>
+                          <td className="px-5 py-2.5 text-right">
+                            <LivePill tone={tone}>{v}</LivePill>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </section>
+              </div>
+            </>
           )}
 
           <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
@@ -778,19 +836,31 @@ function CliFallback({ label, command, busy, onSubmit }: { label: string; comman
   );
 }
 
-function StatusPill({ paused, agent }: { paused: boolean; agent: string }) {
-  const live = !paused && agent === "running";
-  return <span className={`rounded-full px-3 py-1 text-xs font-medium ${live ? "bg-real-soft text-real" : "bg-failed-soft text-failed"}`}>{live ? "● Operating" : paused ? "✕ Paused" : `✕ Agent ${agent}`}</span>;
-}
 
-function Stat({ label, units }: { label: string; units: string }) {
+function Kpi({ icon: Icon, label, value, foot, spark, progress, glow }: { icon: typeof Radio; label: string; value: React.ReactNode; foot: React.ReactNode; spark?: number[]; progress?: number | null; glow?: boolean }) {
   return (
-    <div className="rounded-[var(--radius-card)] border border-rule bg-surface p-5">
-      <div className="text-sm text-ink-3">{label}</div>
-      <div className="mt-2 text-[28px] leading-none"><Money units={units} /></div>
+    <div className={`lift relative overflow-hidden rounded-[var(--radius-card)] border border-rule bg-surface p-4 sm:p-5 ${glow ? "shadow-[0_0_0_1px_var(--accent-soft)]" : ""}`}>
+      <div className="flex items-start justify-between gap-2">
+        <span className="text-sm text-ink-3">{label}</span>
+        <span className={`grid h-8 w-8 place-items-center rounded-lg border border-rule ${glow ? "text-accent" : "text-ink-3"}`}>
+          <Icon size={16} strokeWidth={1.6} />
+        </span>
+      </div>
+      <div className="mt-2 text-[24px] leading-none sm:text-[28px]">{value}</div>
+      <div className="mt-3 flex items-end justify-between gap-2">
+        <span className="text-xs text-ink-3">{foot}</span>
+        {spark && <Sparkline values={spark} className="hidden shrink-0 sm:block" />}
+      </div>
+      {progress !== undefined && progress !== null && (
+        <div className="mt-3 h-1 overflow-hidden rounded-full bg-raised">
+          <div className="grow h-full rounded-full bg-accent" style={{ width: `${Math.min(100, progress)}%` }} />
+        </div>
+      )}
+      {glow && <span aria-hidden className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-[radial-gradient(circle,var(--accent-glow),transparent_70%)]" />}
     </div>
   );
 }
+
 
 function Control({ title, state, action, danger, disabled, onClick }: { title: string; state: string; action: string; danger: boolean; disabled: boolean; onClick: () => void }) {
   return (

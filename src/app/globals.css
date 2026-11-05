@@ -26,6 +26,7 @@
   --color-rule-strong: var(--rule-strong);
   --color-accent: var(--accent);
   --color-accent-soft: var(--accent-soft);
+  --color-live: var(--live);
 
   --color-real: var(--real);
   --color-real-soft: var(--real-soft);
@@ -51,21 +52,24 @@
 
 :root {
   color-scheme: light;
-  --paper: #f6f6f5;
-  --sidebar: #efefee;
+  --paper: #f5f5f4;
+  --sidebar: #fafaf9;
   --surface: #ffffff;
-  --raised: #f1f1f2;
-  --ink: #171717;
-  --ink-2: #525252;
-  --ink-3: #6f6f73;
-  --rule: rgb(23 23 23 / 0.08);
-  --rule-strong: rgb(23 23 23 / 0.14);
-  --accent: #1d4ed8;
-  --accent-soft: rgb(29 78 216 / 0.08);
+  --raised: #f2f2f0;
+  --ink: #161616;
+  --ink-2: #4f4f52;
+  --ink-3: #6e6e73;
+  --rule: rgb(22 22 22 / 0.08);
+  --rule-strong: rgb(22 22 22 / 0.14);
+  /* Signal orange: active places, focus and live work. */
+  --accent: #d9560b;
+  --accent-soft: rgb(217 86 11 / 0.09);
+  --accent-glow: rgb(217 86 11 / 0.22);
 
-  --real: #15803d;
-  --real-soft: #e7f5ec;
-  --quote: #1d4ed8;
+  --real: #16803c;
+  --real-soft: #e5f4ea;
+  --live: #22c55e;
+  --quote: #1f5bd6;
   --quote-soft: #e8eefc;
   --simulated: #5d6068;
   --simulated-soft: #efefef;
@@ -77,48 +81,53 @@
   --flow-in: #a3a3a3;
   --flow-vendor: #2563eb;
   --flow-chain: #0e9f95;
-  --flow-ai: #c27a12;
+  --flow-ai: #d9560b;
   --flow-owner: #16a34a;
   --flow-contrib: #7c6fb0;
 
   --shadow-float: 0 1px 2px rgb(0 0 0 / 0.04), 0 8px 24px rgb(0 0 0 / 0.06);
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.03);
   --highlight: inset 0 1px 0 rgb(255 255 255 / 0.6);
 }
 
+/* Dark: near-black control room, signal orange, green for live. */
 [data-theme="dark"] {
   color-scheme: dark;
-  --paper: #141415;
-  --sidebar: #0f0f10;
-  --surface: #19191b;
-  --raised: #232325;
-  --ink: #ededed;
-  --ink-2: #a1a1a6;
-  --ink-3: #85858b;
-  --rule: rgb(237 237 237 / 0.08);
-  --rule-strong: rgb(237 237 237 / 0.14);
-  --accent: #8aa8ff;
-  --accent-soft: rgb(138 168 255 / 0.1);
+  --paper: #0b0b0c;
+  --sidebar: #0e0e10;
+  --surface: #131315;
+  --raised: #1b1b1e;
+  --ink: #f2f2f2;
+  --ink-2: #a8a8ad;
+  --ink-3: #85858c;
+  --rule: rgb(255 255 255 / 0.07);
+  --rule-strong: rgb(255 255 255 / 0.13);
+  --accent: #ff7a1a;
+  --accent-soft: rgb(255 122 26 / 0.1);
+  --accent-glow: rgb(255 122 26 / 0.28);
 
-  --real: #4cc38a;
-  --real-soft: #13291e;
+  --real: #4ade80;
+  --real-soft: rgb(74 222 128 / 0.1);
+  --live: #22c55e;
   --quote: #8ab4ff;
-  --quote-soft: #15213a;
+  --quote-soft: rgb(138 180 255 / 0.1);
   --simulated: #a3a5ab;
-  --simulated-soft: #222326;
-  --pending: #e9b35a;
-  --pending-soft: #2c2312;
-  --failed: #f2726b;
-  --failed-soft: #321816;
+  --simulated-soft: rgb(255 255 255 / 0.05);
+  --pending: #fbbf24;
+  --pending-soft: rgb(251 191 36 / 0.1);
+  --failed: #f87171;
+  --failed-soft: rgb(248 113 113 / 0.1);
 
-  --flow-in: #5b5b60;
+  --flow-in: #4b4b50;
   --flow-vendor: #4f86f7;
   --flow-chain: #2bb8ad;
-  --flow-ai: #e0a03c;
-  --flow-owner: #4cc38a;
+  --flow-ai: #ff7a1a;
+  --flow-owner: #4ade80;
   --flow-contrib: #a497d6;
 
-  --shadow-float: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 12px 32px rgb(0 0 0 / 0.4);
-  --highlight: inset 0 1px 0 rgb(255 255 255 / 0.06);
+  --shadow-float: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 12px 32px rgb(0 0 0 / 0.5);
+  --shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset;
+  --highlight: inset 0 1px 0 rgb(255 255 255 / 0.05);
 }
 
 html,
@@ -183,9 +192,81 @@ html.theme-tween * {
   animation: fade 400ms var(--ease) 700ms both;
 }
 
+@keyframes slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: none; }
+}
+.drawer {
+  animation: slide-in 320ms var(--ease) both;
+}
+
 .press:active {
   transform: scale(0.98);
 }
+
+/* ---------- live signals ---------- */
+/* A live value: a solid dot with a ring that keeps pinging outwards. */
+@keyframes ping {
+  0% { transform: scale(1); opacity: 0.7; }
+  80%, 100% { transform: scale(2.6); opacity: 0; }
+}
+.live-ping {
+  animation: ping 1.6s var(--ease) infinite;
+}
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.live-blink {
+  animation: blink 1.6s ease-in-out infinite;
+}
+
+/* Loading placeholders sweep once a second instead of saying "Loading". */
+@keyframes shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+.skeleton {
+  background: linear-gradient(90deg, var(--raised) 0%, color-mix(in srgb, var(--raised) 55%, var(--surface)) 50%, var(--raised) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 8px;
+}
+
+/* Cards lift a hair on hover; numbers settle in. */
+.lift {
+  transition: transform 200ms var(--ease), border-color 200ms var(--ease), box-shadow 200ms var(--ease);
+}
+.lift:hover {
+  transform: translateY(-2px);
+  border-color: var(--rule-strong);
+  box-shadow: var(--shadow-float);
+}
+@keyframes grow {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+.grow {
+  transform-origin: left center;
+  animation: grow 900ms var(--ease) 200ms both;
+}
+@keyframes draw {
+  from { stroke-dashoffset: var(--len, 400); }
+  to { stroke-dashoffset: 0; }
+}
+.draw {
+  stroke-dasharray: var(--len, 400);
+  animation: draw 1200ms var(--ease) 150ms both;
+}
+
+/* Grid of KPI cards: rise one after another. */
+.stagger > * {
+  animation: rise 480ms var(--ease) both;
+}
+.stagger > *:nth-child(2) { animation-delay: 60ms; }
+.stagger > *:nth-child(3) { animation-delay: 120ms; }
+.stagger > *:nth-child(4) { animation-delay: 180ms; }
+.stagger > *:nth-child(n + 5) { animation-delay: 240ms; }
 
 @media (prefers-reduced-motion: reduce) {
   *,

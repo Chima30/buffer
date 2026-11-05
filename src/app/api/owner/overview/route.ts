@@ -40,6 +40,14 @@ async function overview() {
   const pQuoteRules = getQuoteRules();
   const pChainProducts = viewFunction<[string, { price: string; max_expense: string; active: boolean }][]>(near.contractId, "get_products").catch(() => []);
   const pContractNear = nearBalance(near.contractId);
+  // Daily series for the KPI cards: the last 14 days, oldest first.
+  const since = new Date(Date.now() - 13 * 86400_000);
+  since.setUTCHours(0, 0, 0, 0);
+  const pSeries = Promise.all([
+    db().from("payments").select("amount_units,verified_at").eq("status", "VERIFIED").gte("verified_at", since.toISOString()),
+    db().from("order_transitions").select("at").eq("to_state", "SETTLED").gte("at", since.toISOString()),
+    db().from("orders").select("id", { count: "exact", head: true }).eq("state", "SETTLED"),
+  ]);
   // Catch up if the owner anchored a draft since the last view.
   const biz0 = await db().from("businesses").select("id").eq("contract_id", near.contractId).maybeSingle();
   if (biz0.data) await promoteAnchoredDraft(biz0.data.id, await getConfig());
@@ -163,7 +171,13 @@ async function overview() {
   if (t && t.eth < 10n ** 16n) alerts.push("Ethereum treasury has under 0.01 Sepolia ETH for gas; cross-chain purchases will not broadcast.");
   if (t && evmVendorPrice && t.usdc < BigInt(evmVendorPrice)) alerts.push("Ethereum treasury holds less Sepolia USDC than one dataset costs; cross-chain purchases will fail. Top it up from faucet.circle.com.");
 
+  const [seriesPay, seriesSettled, settledCount] = await pSeries;
+  const days = Array.from({ length: 14 }, (_, i) => new Date(since.getTime() + i * 86400_000).toISOString().slice(0, 10));
+  const revenueByDay = days.map((d) => (seriesPay.data ?? []).filter((p) => (p.verified_at ?? "").slice(0, 10) === d).reduce((a, p) => a + Number(p.amount_units) / 1e6, 0));
+  const settledByDay = days.map((d) => (seriesSettled.data ?? []).filter((t) => t.at.slice(0, 10) === d).length);
+
   return json({
+    kpis: { days, revenueByDay, settledByDay, settledOrders: settledCount.count ?? 0, readAt: new Date().toISOString() },
     alerts,
     refunds,
     businessTreasury: business_treasury,

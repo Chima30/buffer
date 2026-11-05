@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams } from "next/navigation";
 import { Fragment, useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
+import { LiveDot } from "@/components/live";
 import { StatusBadge } from "@/components/status-badge";
 import { ReportMarkdown } from "@/components/report-markdown";
 import { txHashOf, useNearWallet } from "@/components/wallet";
@@ -176,7 +177,7 @@ function Progress({ state }: { state: string }) {
         const current = !failed && i === idx && state !== "SETTLED";
         return (
           <li key={s.key} className={`bg-surface p-3 ${current ? "text-ink" : done ? "text-real" : "text-ink-3"}`}>
-            <span aria-hidden>{done ? "●" : current ? "◐" : "○"}</span> {s.label}
+            <span className="inline-flex items-center gap-1.5">{current ? <LiveDot tone="live" /> : <span aria-hidden>{done ? "●" : "○"}</span>} {s.label}</span>
             {current && <span className="sr-only"> (in progress)</span>}
           </li>
         );
