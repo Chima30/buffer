@@ -6,11 +6,14 @@
  */
 import { draftProductPricing } from "@/lib/server/policy-builder";
 import { rateLimit } from "@/lib/server/rate-limit";
+import { isOwnerSession } from "@/lib/server/wallet-auth";
 import { fail, json } from "@/lib/server/http";
 
 export async function POST(req: Request) {
   const limited = await rateLimit(req, "policy_draft", 10, 3600);
   if (limited) return limited;
+  // Drafts change nothing until the owner signs on-chain, but only the owner may create or replace one.
+  if (!(await isOwnerSession(req))) return fail(401, "Sign in as the owner to draft policy changes");
   try {
     const d = await draftProductPricing();
     return d ? json(d) : json({ note: "Every product is already priced in the policy" });

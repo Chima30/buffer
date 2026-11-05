@@ -95,3 +95,23 @@ function historySnapshot(): LocalItem[] {
 
 export const useSession = () => useSyncExternalStore(subscribe, sessionSnapshot, () => null);
 export const useLocalHistory = () => useSyncExternalStore(subscribe, historySnapshot, () => EMPTY);
+
+/** Proves the connected wallet owns its account (NEP-413 message, no transaction) and stores the session. */
+export async function signInWithWallet(wallet: {
+  signedAccountId: string;
+  signNEP413Message: (p: { message: string; recipient: string; nonce: Uint8Array }) => Promise<{ accountId: string; publicKey: string; signature: string } | undefined | null>;
+}): Promise<Session> {
+  const c = await (await fetch("/api/me/challenge", { method: "POST" })).json();
+  if (!c.nonce) throw new Error(c.error ?? "Could not start sign-in");
+  const signed = await wallet.signNEP413Message({ message: c.message, recipient: c.recipient, nonce: Uint8Array.from((c.nonce as string).match(/../g)!.map((h) => parseInt(h, 16))) });
+  if (!signed) throw new Error("The wallet did not sign the message");
+  const res = await fetch("/api/me/session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ accountId: signed.accountId || wallet.signedAccountId, publicKey: signed.publicKey, signature: signed.signature, nonce: c.nonce }),
+  });
+  const j = await res.json();
+  if (!res.ok) throw new Error(j.error ?? "Sign-in failed");
+  setSession(j);
+  return j as Session;
+}

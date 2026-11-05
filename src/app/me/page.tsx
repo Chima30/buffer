@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { Money } from "@/components/money";
 import { useNearWallet } from "@/components/wallet";
-import { sessionHeaders, setSession, useLocalHistory, useSession } from "@/lib/client/session";
+import { sessionHeaders, setSession, signInWithWallet, useLocalHistory, useSession } from "@/lib/client/session";
 
 interface Mine {
   account: string;
@@ -67,18 +67,7 @@ export default function MyOrdersPage() {
     setBusy(true);
     setError(null);
     try {
-      const c = await (await fetch("/api/me/challenge", { method: "POST" })).json();
-      if (!c.nonce) throw new Error(c.error ?? "Could not start sign-in");
-      const signed = await wallet.signNEP413Message({ message: c.message, recipient: c.recipient, nonce: Uint8Array.from(c.nonce.match(/../g).map((h: string) => parseInt(h, 16))) });
-      if (!signed) throw new Error("The wallet did not sign the message");
-      const res = await fetch("/api/me/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accountId: signed.accountId || wallet.signedAccountId, publicKey: signed.publicKey, signature: signed.signature, nonce: c.nonce }),
-      });
-      const j = await res.json();
-      if (!res.ok) throw new Error(j.error ?? "Sign-in failed");
-      setSession(j);
+      await signInWithWallet(wallet);
     } catch (e) {
       setError((e as Error).message || "Sign-in was cancelled");
     } finally {

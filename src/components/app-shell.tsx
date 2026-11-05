@@ -74,15 +74,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Mark />
           <span className="text-[17px] font-medium tracking-tight">Buffer</span>
         </Link>
+        {/* Wallet first: it decides what you can see and sign everywhere else. */}
+        <div className="px-5 pb-4">
+          <WalletButton />
+        </div>
         <div className="px-3">
           <p className="px-2.5 pb-2 text-xs text-ink-3">Verified Research Desk</p>
           <Suspense fallback={<NavList active={null} />}>
             <NavLinks />
           </Suspense>
         </div>
-        <div className="mt-auto space-y-3 border-t border-rule px-5 py-4">
+        <div className="mt-auto border-t border-rule px-5 py-4">
           <Network />
-          <WalletButton />
         </div>
         {/* The theme switch sits on the sidebar's edge, half in and half out. */}
         <ThemeToggle className="absolute -right-4 top-20" />
@@ -94,10 +97,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <Mark />
           <span className="font-medium tracking-tight">Buffer</span>
         </Link>
-        <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" className="grid h-9 w-9 place-items-center rounded-lg text-ink-2 hover:bg-raised">
-          <Menu size={18} strokeWidth={1.5} />
-        </button>
-        <ThemeToggle className="absolute -bottom-4 right-16" />
+        <div className="flex items-center gap-2">
+          <div className="w-36">
+            <WalletButton />
+          </div>
+          <button type="button" onClick={() => setOpen(true)} aria-label="Open menu" className="grid h-9 w-9 place-items-center rounded-lg text-ink-2 hover:bg-raised">
+            <Menu size={18} strokeWidth={1.5} />
+          </button>
+        </div>
+        <ThemeToggle className="absolute -bottom-4 right-6" />
       </header>
 
       {open && (
@@ -115,9 +123,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <NavLinks onNavigate={() => setOpen(false)} />
               </Suspense>
             </div>
-            <div className="mt-auto space-y-3 border-t border-rule pt-4">
+            <div className="mt-auto border-t border-rule pt-4">
               <Network />
-              <WalletButton />
             </div>
           </div>
         </div>

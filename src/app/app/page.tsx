@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { Money } from "@/components/money";
 import { MoneyFlow } from "@/components/money-flow";
 import { txHashOf, useNearWallet } from "@/components/wallet";
+import { sessionHeaders, signInWithWallet } from "@/lib/client/session";
 
 interface Overview {
   business: { id: string; name: string; status: "active" | "paused" } | null;
@@ -25,7 +26,7 @@ interface Overview {
     plan: { interval_ns: number; min_issues: number; max_issues: number; active: boolean } | null;
     steps: { label: string; method: string; args: Record<string, unknown> }[];
   } | null;
-  chainsSetup: {
+  chainsSetup?: {
     treasuryAddress: string | null;
     policyCoversVendors: boolean;
     chains: {
@@ -76,6 +77,26 @@ const NEAR_YOCTO = (n: number) => (BigInt(Math.round(n * 1000)) * 10n ** 21n).to
 /** Starting rules for the self-funding treasury; the owner can change them. */
 const TREASURY_DEFAULTS = { reserve_bps: 1000, reserve_target: "20000000", gas_refill_amount: NEAR_YOCTO(0.5), gas_week_cap: NEAR_YOCTO(2) };
 
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "rules", label: "Rules" },
+  { key: "money", label: "Money" },
+  { key: "products", label: "Products" },
+  { key: "vendors", label: "Vendors" },
+  { key: "activity", label: "Activity" },
+] as const;
+type TabKey = (typeof TABS)[number]["key"];
+const TabContext = createContext<TabKey>("overview");
+
+const subscribeHash = (cb: () => void) => {
+  window.addEventListener("hashchange", cb);
+  return () => window.removeEventListener("hashchange", cb);
+};
+const useTab = (): TabKey => {
+  const raw = useSyncExternalStore(subscribeHash, () => window.location.hash.slice(1), () => "");
+  return (TABS.find((t) => t.key === raw)?.key ?? "overview") as TabKey;
+};
+
 export default function OwnerConsole() {
   const wallet = useNearWallet();
   const [data, setData] = useState<Overview | null>(null);
@@ -106,6 +127,33 @@ export default function OwnerConsole() {
   }, [load]);
 
   const isOwner = !!data && wallet.signedAccountId === data.contract.owner;
+  const tab = useTab();
+  const [chains, setChains] = useState<Overview["chainsSetup"] | null>(null);
+  const loadChains = useCallback(async () => {
+    const r = await fetch("/api/owner/chains", { cache: "no-store" });
+    if (r.ok) setChains(await r.json());
+  }, []);
+  useEffect(() => {
+    if (tab !== "vendors") return;
+    const first = setTimeout(loadChains, 0);
+    const t = setInterval(loadChains, 30_000);
+    return () => {
+      clearTimeout(first);
+      clearInterval(t);
+    };
+  }, [tab, loadChains]);
+
+  /** Owner-only server calls: sign in once with the wallet (free message), then retry. */
+  async function ownerFetch(url: string, init: RequestInit = {}): Promise<Response> {
+    const send = () => fetch(url, { ...init, headers: { ...(init.headers ?? {}), ...sessionHeaders() } });
+    let r = await send();
+    if (r.status === 401 && isOwner) {
+      setNotice({ tone: "pending", text: "Sign the short sign-in message in your wallet (free, not a transaction)…" });
+      await signInWithWallet(wallet);
+      r = await send();
+    }
+    return r;
+  }
 
   /** Verify an owner-signed transaction on-chain, then record it. Used by wallet and near-cli paths. */
   async function recordTx(label: string, hash: string) {
@@ -136,8 +184,9 @@ export default function OwnerConsole() {
   }
 
   async function draftPricing() {
+    if (!isOwner) return setNotice({ tone: "failed", text: "Connect the owner wallet to draft policy changes." });
     setBusy("Policy draft");
-    const r = await fetch("/api/policy/pricing-draft", { method: "POST" });
+    const r = await ownerFetch("/api/policy/pricing-draft", { method: "POST" });
     const j = await r.json().catch(() => ({}));
     setNotice(r.ok ? { tone: "pending", text: j.version ? `Policy v${j.version} drafted. Sign "Anchor policy v${j.version}" in the policy card to put it in force.` : j.note } : { tone: "failed", text: j.error ?? "Could not draft the policy" });
     setBusy(null);
@@ -170,7 +219,7 @@ export default function OwnerConsole() {
         {data && <StatusPill paused={data.contract.paused} agent={data.agent?.status ?? "paused"} />}
       </div>
 
-      {!wallet.signedAccountId && <Banner tone="simulated">Viewing read-only. Connect the owner wallet to approve purchases or use the emergency controls.</Banner>}
+      {!wallet.signedAccountId && <Banner tone="simulated">Anyone can view this console; only the owner can act. Every change is a transaction the contract accepts from the owner account alone. Connect the owner wallet to act.</Banner>}
       {wallet.signedAccountId && data && !isOwner && <Banner tone="failed">Connected as {wallet.signedAccountId}. Only {data.contract.owner} can act; the contract would reject anyone else.</Banner>}
       {notice && <Banner tone={notice.tone}>{notice.text}</Banner>}
       {error && <Banner tone="failed">{error}</Banner>}
@@ -178,7 +227,25 @@ export default function OwnerConsole() {
       {!data && !error && <p className="mt-8 text-ink-3">Loading…</p>}
 
       {data && (
-        <>
+        <TabContext.Provider value={tab}>
+          <nav aria-label="Owner console sections" className="sticky top-14 z-20 -mx-5 mt-6 overflow-x-auto border-b border-rule bg-paper/95 px-5 backdrop-blur sm:-mx-8 sm:px-8 lg:top-0">
+            <ul className="flex gap-1">
+              {TABS.map((t) => (
+                <li key={t.key}>
+                  <a
+                    href={`#${t.key}`}
+                    aria-current={tab === t.key ? "page" : undefined}
+                    className={`relative block whitespace-nowrap px-3 py-3 text-sm transition-colors duration-150 ${tab === t.key ? "text-ink after:absolute after:inset-x-3 after:bottom-0 after:h-0.5 after:rounded-full after:bg-ink" : "text-ink-3 hover:text-ink"}`}
+                  >
+                    {t.label}
+                    {t.key === "overview" && data.pendingApprovals.length > 0 && <span className="ml-1.5 rounded-full bg-pending-soft px-1.5 text-xs text-pending">{data.pendingApprovals.length}</span>}
+                    {t.key === "money" && data.refunds.length > 0 && <span className="ml-1.5 rounded-full bg-failed-soft px-1.5 text-xs text-failed">{data.refunds.length}</span>}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </nav>
+          {tab === "overview" && (
           <div className="mt-6 grid gap-4 lg:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
             {(() => {
               const r = BigInt(data.totals.revenue), v = BigInt(data.totals.vendorSpend), ai = BigInt(data.totals.inferenceSpend), c = BigInt(data.totals.contributorPaid), kept = BigInt(data.totals.reserveKept ?? "0");
@@ -204,9 +271,11 @@ export default function OwnerConsole() {
             </section>
           </div>
 
-          <div className="mt-6 grid gap-6 lg:grid-cols-[1.3fr_1fr]">
-            <div className="space-y-6">
-              <Card title={`Approvals${data.pendingApprovals.length ? ` (${data.pendingApprovals.length})` : ""}`}>
+          )}
+
+          <div className="mt-6 grid items-start gap-6 lg:grid-cols-2">
+            <div className="contents">
+              <Card tab="overview" title={`Approvals${data.pendingApprovals.length ? ` (${data.pendingApprovals.length})` : ""}`}>
                 {data.pendingApprovals.length === 0 ? (
                   <p className="text-sm text-ink-3">Nothing waiting. Purchases above <Money units={data.contract.approvalAboveUnits} /> will appear here.</p>
                 ) : (
@@ -246,7 +315,7 @@ export default function OwnerConsole() {
                 )}
               </Card>
 
-              <Card title="Recent orders">
+              <Card tab="money" title="Recent orders">
                 {data.orders.length === 0 ? <p className="text-sm text-ink-3">No orders yet. <Link href="/store" className="text-accent">Open the store</Link>.</p> : (
                   <ul className="divide-y divide-rule text-sm">
                     {data.orders.map((o) => (
@@ -261,7 +330,7 @@ export default function OwnerConsole() {
               </Card>
 
               {data.refunds.length > 0 && (
-                <Card title="Refunds">
+                <Card tab="money" title="Refunds">
                   <p className="text-sm text-ink-2">Return a customer&apos;s payment in full. A refund stops the agent on that order. If the vendor was already paid from escrow, you top up that amount first so the customer gets all of it back.</p>
                   <ul className="mt-3 space-y-3">
                     {data.refunds.map((r) => {
@@ -284,7 +353,7 @@ export default function OwnerConsole() {
                 </Card>
               )}
 
-              <Card title="Agent decisions">
+              <Card tab="activity" title="Agent decisions">
                 <ul className="divide-y divide-rule text-sm">
                   {data.recentActions.map((a, i) => (
                     <li key={i} className="py-2">
@@ -299,8 +368,8 @@ export default function OwnerConsole() {
               </Card>
             </div>
 
-            <div className="space-y-6">
-              <Card title="Emergency controls">
+            <div className="contents">
+              <Card tab="overview" title="Emergency controls">
                 <p className="text-sm text-ink-2">Each control is a transaction you sign. The agent cannot undo it.</p>
                 <div className="mt-4 space-y-3">
                   <Control
@@ -336,7 +405,7 @@ export default function OwnerConsole() {
                 )}
               </Card>
 
-              <Card title="Policy">
+              <Card tab="rules" title="Policy">
                 <p className="text-sm">
                   Version {data.contract.policyVersion}{" "}
                   {data.policyAnchored ? <span className="text-real">● matches the on-chain anchor</span> : <span className="text-failed">✕ does not match the on-chain anchor: the agent will not act</span>}
@@ -371,10 +440,10 @@ export default function OwnerConsole() {
                 )}
 
                 <RecordTx label="Record a policy transaction" busy={!!busy} onSubmit={(h) => recordPasted("Policy", h)} />
-                <PolicyBuilder onDrafted={load} />
+                <PolicyBuilder onDrafted={load} ownerFetch={ownerFetch} canDraft={isOwner} />
               </Card>
 
-              <Card title="Treasury">
+              <Card tab="money" title="Treasury">
                 {!data.businessTreasury ? (
                   <p className="text-sm text-ink-3">The self-funding treasury needs the latest contract upgrade.</p>
                 ) : (
@@ -434,7 +503,7 @@ export default function OwnerConsole() {
               </Card>
 
               {data.subscriptionSetup && (
-                <Card title="Subscriptions">
+                <Card tab="products" title="Subscriptions">
                   {(() => {
                     const su = data.subscriptionSetup!;
                     if (!su.contractSupports) return <p className="text-sm text-ink-2">Prepaid subscriptions need the latest contract upgrade.</p>;
@@ -497,7 +566,7 @@ export default function OwnerConsole() {
               )}
 
               {data.quoteSetup && (
-                <Card title="Custom quotes">
+                <Card tab="products" title="Custom quotes">
                   {(() => {
                     const qs = data.quoteSetup!;
                     if (!qs.contractSupports) return <p className="text-sm text-ink-2">Custom quotes need the latest contract upgrade.</p>;
@@ -532,9 +601,10 @@ export default function OwnerConsole() {
                 </Card>
               )}
 
-              <Card title="Vendors and chains">
+              <Card tab="vendors" title="Vendors and chains">
                 {(() => {
-                  const cs = data.chainsSetup;
+                  const cs = chains;
+                  if (!cs) return <p className="text-sm text-ink-3">Reading the chains…</p>;
                   const eth = (w: string | null) => (w === null ? "—" : (Number(BigInt(w) / 10n ** 12n) / 1e6).toFixed(4));
                   return (
                     <div className="space-y-3 text-sm">
@@ -588,7 +658,7 @@ export default function OwnerConsole() {
                 })()}
               </Card>
 
-              <Card title="Agent">
+              <Card tab="overview" title="Agent">
                 <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
                   <dt className="text-ink-3">Name</dt><dd>{data.agent?.name}</dd>
                   <dt className="text-ink-3">Status</dt><dd>{data.agent?.status}</dd>
@@ -598,13 +668,13 @@ export default function OwnerConsole() {
               </Card>
             </div>
           </div>
-        </>
+        </TabContext.Provider>
       )}
     </main>
   );
 }
 
-function PolicyBuilder({ onDrafted }: { onDrafted: () => Promise<void> }) {
+function PolicyBuilder({ onDrafted, ownerFetch, canDraft }: { onDrafted: () => Promise<void>; ownerFetch: (url: string, init?: RequestInit) => Promise<Response>; canDraft: boolean }) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<DraftResult | null>(null);
@@ -615,7 +685,8 @@ function PolicyBuilder({ onDrafted }: { onDrafted: () => Promise<void> }) {
     setError(null);
     setResult(null);
     try {
-      const res = await fetch("/api/policy/draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+      if (!canDraft) throw new Error("Connect the owner wallet to draft policy changes");
+      const res = await ownerFetch("/api/policy/draft", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
       const j = await res.json();
       if (!res.ok) throw new Error(j.error ?? "Could not draft the policy");
       setResult(j);
@@ -733,7 +804,9 @@ function Control({ title, state, action, danger, disabled, onClick }: { title: s
   );
 }
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
+function Card({ title, tab, children }: { title: string; tab?: TabKey; children: React.ReactNode }) {
+  const active = useContext(TabContext);
+  if (tab && tab !== active) return null;
   return (
     <section className="rounded-[var(--radius-card)] border border-rule bg-surface">
       <h2 className="border-b border-rule px-5 py-3 font-medium">{title}</h2>

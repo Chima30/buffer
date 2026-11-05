@@ -108,3 +108,9 @@ export async function sessionAccount(token: string | null | undefined): Promise<
 export const sessionFrom = (req: Request) => sessionAccount(req.headers.get("x-buffer-session"));
 
 export class AuthError extends Error {}
+
+/** True only for a valid session of the business contract's owner account. */
+export async function isOwnerSession(req: Request): Promise<boolean> {
+  const account = await sessionFrom(req);
+  return !!account && account === nearConfig().ownerAccountId;
+}

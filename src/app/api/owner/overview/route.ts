@@ -12,9 +12,7 @@ import type { PolicyDocument } from "@/lib/domain/policy/schema";
 import { promoteAnchoredDraft } from "@/lib/server/business";
 import { db } from "@/lib/server/db";
 import { openDraft, ownerCommands } from "@/lib/server/policy-builder";
-import { getEvmChainConfigs, getEvmVendorApprovals, treasury as treasuryAddress, treasuryBalances, treasuryBalancesAll } from "@/lib/server/evm";
-import { evmChains } from "@/lib/server/chains";
-import { vendorPrice } from "@/lib/server/procurement";
+import { treasuryBalances } from "@/lib/server/evm";
 import { nearBalance } from "@/lib/server/near-rpc";
 import { sepoliaConfig } from "@/lib/server/env";
 import { nearConfig } from "@/lib/server/env";
@@ -35,6 +33,13 @@ export async function GET() {
 
 async function overview() {
   const near = nearConfig();
+  // Slow chain reads start at once and run in parallel with everything else.
+  const pEvmTreasury = treasuryBalances().catch(() => null);
+  const pTreasury = getTreasury();
+  const pPlans = getSubscriptionPlans();
+  const pQuoteRules = getQuoteRules();
+  const pChainProducts = viewFunction<[string, { price: string; max_expense: string; active: boolean }][]>(near.contractId, "get_products").catch(() => []);
+  const pContractNear = nearBalance(near.contractId);
   // Catch up if the owner anchored a draft since the last view.
   const biz0 = await db().from("businesses").select("id").eq("contract_id", near.contractId).maybeSingle();
   if (biz0.data) await promoteAnchoredDraft(biz0.data.id, await getConfig());
@@ -79,9 +84,9 @@ async function overview() {
     topUpUnits: spent.filter((p) => p.order_id === o.id).reduce((a, p) => a + BigInt(p.amount_units), 0n).toString(),
   }));
 
-  const t = await treasuryBalances().catch(() => null);
+  const t = await pEvmTreasury;
   const [onchainTreasury, gasRefills, agentGas] = await Promise.all([
-    getTreasury(),
+    pTreasury,
     db().from("ledger_entries").select("tx_hash,explorer_url,details,at").eq("event_type", "gas_refilled").order("at", { ascending: false }).limit(5),
     agent.data?.near_account ? nearBalance(agent.data.near_account) : Promise.resolve(null),
   ]);
@@ -99,8 +104,8 @@ async function overview() {
 
   // Subscriptions: what the contract allows, what the owner still has to switch on, and recent ones.
   const [plans, chainProducts, subProduct, subs] = await Promise.all([
-    getSubscriptionPlans(),
-    viewFunction<[string, { price: string; max_expense: string; active: boolean }][]>(near.contractId, "get_products").catch(() => []),
+    pPlans,
+    pChainProducts,
     db().from("products").select("sku,title,price_units,max_expense_units").eq("kind", "subscription").limit(1).maybeSingle(),
     db().from("subscriptions").select("id,onchain_subscription_id,state,issues_total,issues_started,issue_price_units,customer_account,next_due_at,refund_units,refund_status,created_at").neq("state", "AWAITING_PAYMENT").order("created_at", { ascending: false }).limit(8),
   ]);
@@ -127,7 +132,7 @@ async function overview() {
     : null;
 
   // Custom quotes: the owner's limits in the contract and what is still to switch on.
-  const [ruleList, quoteProduct] = await Promise.all([getQuoteRules(), db().from("products").select("sku,title,price_units,max_expense_units").eq("kind", "quote").limit(1).maybeSingle()]);
+  const [ruleList, quoteProduct] = await Promise.all([pQuoteRules, db().from("products").select("sku,title,price_units,max_expense_units").eq("kind", "quote").limit(1).maybeSingle()]);
   const qp = quoteProduct.data;
   const qProductOnchain = qp ? chainProducts.find(([sku]) => sku === qp.sku)?.[1] : undefined;
   const qRules = qp ? (ruleList ?? []).find(([sku]) => sku === qp.sku)?.[1] : undefined;
@@ -148,55 +153,11 @@ async function overview() {
       }
     : null;
 
-  // Vendor competition: each chain's contract config, treasury balances, vendors and what is left to switch on.
-  const [chainConfigs, chainApprovals, balances, vendorRows, tAddr] = await Promise.all([
-    getEvmChainConfigs().catch(() => []),
-    getEvmVendorApprovals().catch(() => new Map<number, Set<string>>()),
-    treasuryBalancesAll().catch(() => []),
-    db().from("vendors").select("id,name,chain,near_account,evm_address,unit_price_units,approved").eq("approved", true).order("chain"),
-    treasuryAddress().catch(() => null),
-  ]);
-  const originalChain = (await getEvmChainConfigs().catch(() => []))[0]?.chain_id;
-  const policyChains = new Set([...(activeDoc?.rules.crosschain ? [activeDoc.rules.crosschain.chain_id] : []), ...(activeDoc?.rules.crosschain_chains ?? []).map((c) => c.chain_id)]);
-  const vendors = (vendorRows.data ?? []).map((v) => ({ id: v.id, name: v.name, chain: v.chain, address: v.chain === "near" ? v.near_account : v.evm_address, priceNowUnits: vendorPrice({ id: v.id, unit_price_units: String(v.unit_price_units) }).toString(), basePriceUnits: String(v.unit_price_units) }));
-  const chainsSetup = {
-    treasuryAddress: tAddr,
-    policyCoversVendors: (vendorRows.data ?? []).every((v) => v.chain === "near" || (activeDoc?.rules.procurement.approved_vendor_ids.includes(v.id) ?? false)),
-    chains: evmChains().map((c) => {
-      const cfg = chainConfigs.find((x) => x.chain_id === c.chainId);
-      const bal = balances.find((b) => b.chain.chainId === c.chainId);
-      const onChainVendors = vendors.filter((v) => v.chain === c.key && v.address);
-      const approved = chainApprovals.get(c.chainId) ?? new Set<string>();
-      const isOriginal = originalChain === c.chainId;
-      return {
-        key: c.key,
-        name: c.name,
-        chainId: c.chainId,
-        configured: !!cfg,
-        inPolicy: policyChains.has(c.chainId),
-        eth: bal ? bal.eth.toString() : null,
-        usdc: bal ? bal.usdc.toString() : null,
-        explorerAddress: tAddr ? `${c.explorer}/address/${tAddr}` : null,
-        vendors: onChainVendors.map((v) => ({ ...v, approvedOnChain: approved.has((v.address ?? "").toLowerCase()) })),
-        steps: [
-          ...(!cfg && !isOriginal
-            ? [{ label: `Switch on ${c.name}`, method: "set_evm_chain", args: { config: { mpc_contract: sepoliaConfig().mpcContract, chain_id: c.chainId, usdc: c.usdc, max_fee_per_gas_cap: c.defaults.maxFeePerGasCapWei, gas_limit: c.defaults.gasLimit } } }]
-            : []),
-          ...(isOriginal
-            ? []
-            : onChainVendors
-                .filter((v) => !approved.has((v.address ?? "").toLowerCase()))
-                .map((v) => ({ label: `Approve ${v.name} on ${c.name}`, method: "set_evm_chain_vendor", args: { chain_id: c.chainId, vendor: v.address, approved: true } }))),
-        ],
-      };
-    }),
-    nearVendors: vendors.filter((v) => v.chain === "near"),
-  };
 
   // Low balances that would stall the business during judging.
   const YOCTO = 10n ** 24n;
   const alerts: string[] = [];
-  const [agentNear, contractNear] = await Promise.all([agent.data?.near_account ? nearBalance(agent.data.near_account) : null, nearBalance(near.contractId)]);
+  const [agentNear, contractNear] = await Promise.all([agent.data?.near_account ? nearBalance(agent.data.near_account) : null, pContractNear]);
   if (agentNear && agentNear.spendable < YOCTO / 2n) alerts.push(`Agent wallet has ${(Number(agentNear.spendable / 10n ** 21n) / 1000).toFixed(3)} NEAR for gas; top it up above 0.5 NEAR or it cannot call the contract.`);
   if (contractNear && contractNear.spendable < YOCTO) alerts.push(`Business contract has ${(Number(contractNear.spendable / 10n ** 21n) / 1000).toFixed(3)} NEAR free; new orders need storage. Send it at least 1 NEAR.`);
   if (t && t.eth < 10n ** 16n) alerts.push("Ethereum treasury has under 0.01 Sepolia ETH for gas; cross-chain purchases will not broadcast.");
@@ -234,7 +195,6 @@ async function overview() {
     },
     subscriptionSetup,
     quoteSetup,
-    chainsSetup,
     subscriptions: subs.data ?? [],
     pendingApprovals: pending.data ?? [],
     orders: orders.data ?? [],
