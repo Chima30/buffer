@@ -1,6 +1,6 @@
 "use client";
 
-import { Activity, BookText, Boxes, Gauge, HeartPulse, Landmark, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
+import { Activity, BookText, Boxes, ChevronRight, Gauge, HeartPulse, Landmark, History, Home, Menu, Network as NetworkIcon, PlusSquare, Scale, ShieldCheck, ShoppingBag, SlidersHorizontal, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Suspense, useState, useSyncExternalStore } from "react";
@@ -78,6 +78,14 @@ function NavList({ path, hash, onNavigate }: { path: string | null; hash: string
                         <span aria-hidden className={`absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-accent transition-transform duration-300 ${on ? "scale-y-100" : "scale-y-0"}`} />
                         <Icon size={sub ? 14 : 16} strokeWidth={1.6} className={on ? "text-accent" : "text-ink-3 group-hover:text-ink-2"} />
                         {label}
+                        {href === "/app" && (
+                          <ChevronRight
+                            aria-hidden
+                            size={14}
+                            strokeWidth={1.6}
+                            className={`ml-auto transition-transform duration-200 ${path === "/app" ? "rotate-90" : ""} ${on ? "text-accent" : "text-ink-3"}`}
+                          />
+                        )}
                       </>
                     );
                     // Console sections are plain hash links: the browser fires hashchange, which the console's tabs follow.
