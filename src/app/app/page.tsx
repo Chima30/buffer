@@ -220,7 +220,6 @@ export default function OwnerConsole() {
         <p className="text-sm text-ink-3">Owner console</p>
         <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-2">
           <h1 className="text-[28px] font-medium leading-[1.15] tracking-[-0.02em] sm:text-[32px]">{data?.business?.name ?? "Business"}</h1>
-        {data && <LivePill tone={!data.contract.paused && data.agent?.status === "running" ? "live" : "warn"}>{!data.contract.paused && data.agent?.status === "running" ? "Live on NEAR testnet" : data.contract.paused ? "Paused" : `Agent ${data.agent?.status}`}</LivePill>}
         </div>
       </div>
 
@@ -244,7 +243,7 @@ export default function OwnerConsole() {
 
       {data && (
         <TabContext.Provider value={tab}>
-          <nav aria-label="Owner console sections" className="sticky top-14 z-20 -mx-5 mt-6 overflow-x-auto border-b border-rule bg-paper/95 px-5 backdrop-blur sm:-mx-8 sm:px-8 lg:top-0">
+          <nav aria-label="Owner console sections" className="sticky top-14 z-10 -mx-5 mt-6 overflow-x-auto border-b border-rule bg-paper/95 px-5 backdrop-blur sm:-mx-8 sm:px-8 lg:top-16">
             <ul className="flex gap-1">
               {TABS.map((t) => (
                 <li key={t.key}>

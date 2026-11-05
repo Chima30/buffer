@@ -113,7 +113,8 @@ function Network() {
 function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
   return (
     <>
-      <div className="px-4 pb-4">
+      {/* On phones the wallet lives in the drawer too; on desktop it sits top right. */}
+      <div className="px-4 pb-4 lg:hidden">
         <WalletButton />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
@@ -176,7 +177,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       )}
 
       <div className="lg:pl-64">
-        <div className="mx-auto w-full max-w-[1240px] px-5 py-8 sm:px-8 lg:py-10">{children}</div>
+        {/* Desktop top bar: the wallet, top right, on every page. */}
+        <div className="sticky top-0 z-20 hidden h-16 items-center justify-end border-b border-rule bg-paper/85 px-8 backdrop-blur lg:flex">
+          <div className="w-56">
+            <WalletButton />
+          </div>
+        </div>
+        <div className="mx-auto w-full max-w-[1240px] px-5 py-8 sm:px-8 lg:py-8">{children}</div>
       </div>
     </div>
   );
