@@ -60,20 +60,40 @@ export function vendorPrice(vendor: { id: string; unit_price_units: string }, at
 
 let ethCache: { usd: number; at: number; source: string } | null = null;
 
-/** ETH/USD from the Pyth network (mainnet price, used to value testnet gas as if real). */
+async function fromPyth(): Promise<number> {
+  const id = "0xff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace";
+  const res = await fetch(`https://hermes.pyth.network/v2/updates/price/latest?ids%5B%5D=${id}&parsed=true`, { signal: AbortSignal.timeout(8000), cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const j = (await res.json()) as { parsed?: { price: { price: string; expo: number } }[] };
+  const p = j.parsed?.[0]?.price;
+  const usd = p ? Number(p.price) * 10 ** p.expo : NaN;
+  if (!Number.isFinite(usd) || usd <= 0) throw new Error("no price in reply");
+  return usd;
+}
+
+async function fromCoinbase(): Promise<number> {
+  const res = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", { signal: AbortSignal.timeout(8000), cache: "no-store" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const j = (await res.json()) as { data?: { amount?: string } };
+  const usd = Number(j.data?.amount);
+  if (!Number.isFinite(usd) || usd <= 0) throw new Error("no price in reply");
+  return usd;
+}
+
+/** ETH/USD to value testnet gas as if it were real: Pyth first, then Coinbase, then a labelled fallback. */
 export async function ethUsd(): Promise<{ usd: number; source: string }> {
   if (ethCache && Date.now() - ethCache.at < 5 * 60_000) return ethCache;
-  try {
-    const id = "ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace";
-    const res = await fetch(`https://hermes.pyth.network/v2/updates/price/latest?ids[]=${id}&parsed=true`, { signal: AbortSignal.timeout(5000) });
-    const j = (await res.json()) as { parsed?: { price: { price: string; expo: number } }[] };
-    const p = j.parsed?.[0]?.price;
-    const usd = p ? Number(p.price) * 10 ** p.expo : NaN;
-    if (!Number.isFinite(usd) || usd <= 0) throw new Error("bad price");
-    ethCache = { usd, at: Date.now(), source: "Pyth ETH/USD" };
-  } catch {
-    ethCache = { usd: 3000, at: Date.now(), source: "fallback 3000 USD (price feed unavailable)" };
+  const errors: string[] = [];
+  for (const [name, get] of [["Pyth ETH/USD", fromPyth], ["Coinbase ETH-USD", fromCoinbase]] as const) {
+    try {
+      ethCache = { usd: await get(), at: Date.now(), source: name };
+      return ethCache;
+    } catch (e) {
+      errors.push(`${name.split(" ")[0]}: ${(e as Error).message.slice(0, 40)}`);
+    }
   }
+  // Do not cache the fallback for long: try the feeds again on the next order.
+  ethCache = { usd: 3000, at: Date.now() - 4 * 60_000, source: `fallback 3000 USD (${errors.join("; ")})` };
   return ethCache;
 }
 
