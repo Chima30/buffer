@@ -18,6 +18,8 @@ export interface EvmChainInfo {
   chainId: number;
   usdc: `0x${string}`;
   rpcUrl: string;
+  /** Public endpoints tried after rpcUrl when it fails or rate-limits. */
+  fallbackRpcs?: string[];
   viem: Chain;
   explorer: string;
   gasToken: GasToken;
@@ -40,6 +42,7 @@ export function evmChains(): EvmChainInfo[] {
       chainId: 11155111,
       usdc: "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
       rpcUrl: env("SEPOLIA_RPC_URL", "https://ethereum-sepolia-rpc.publicnode.com"),
+      fallbackRpcs: ["https://sepolia.drpc.org", "https://rpc.sepolia.org"],
       viem: sepolia,
       explorer: "https://sepolia.etherscan.io",
       gasToken: "ETH",
@@ -51,6 +54,7 @@ export function evmChains(): EvmChainInfo[] {
       chainId: 84532,
       usdc: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
       rpcUrl: env("BASE_SEPOLIA_RPC_URL", "https://sepolia.base.org"),
+      fallbackRpcs: ["https://base-sepolia-rpc.publicnode.com"],
       viem: baseSepolia,
       explorer: "https://sepolia.basescan.org",
       gasToken: "ETH",
@@ -62,6 +66,7 @@ export function evmChains(): EvmChainInfo[] {
       chainId: 421614,
       usdc: "0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d",
       rpcUrl: env("ARBITRUM_SEPOLIA_RPC_URL", "https://sepolia-rollup.arbitrum.io/rpc"),
+      fallbackRpcs: ["https://arbitrum-sepolia-rpc.publicnode.com"],
       viem: arbitrumSepolia,
       // Arbitrum transfers use more gas units than L1 because of L1 data costs.
       explorer: "https://sepolia.arbiscan.io",
@@ -74,6 +79,7 @@ export function evmChains(): EvmChainInfo[] {
       chainId: 11155420,
       usdc: "0x5fd84259d66Cd46123540766Be93DFE6D43130D7",
       rpcUrl: env("OP_SEPOLIA_RPC_URL", "https://sepolia.optimism.io"),
+      fallbackRpcs: ["https://optimism-sepolia-rpc.publicnode.com"],
       viem: optimismSepolia,
       explorer: "https://sepolia-optimism.etherscan.io",
       gasToken: "ETH",
@@ -85,6 +91,7 @@ export function evmChains(): EvmChainInfo[] {
       chainId: 80002,
       usdc: "0x41E94Eb019C0762f9Bfcf9Fb1E58725BfB0e7582",
       rpcUrl: env("POLYGON_AMOY_RPC_URL", "https://rpc-amoy.polygon.technology"),
+      fallbackRpcs: ["https://polygon-amoy-bor-rpc.publicnode.com", "https://polygon-amoy.drpc.org"],
       viem: polygonAmoy,
       explorer: "https://amoy.polygonscan.com",
       gasToken: "POL",
@@ -98,6 +105,7 @@ export function evmChains(): EvmChainInfo[] {
       chainId: 43113,
       usdc: "0x5425890298aed601595a70AB815c96711a31Bc65",
       rpcUrl: env("AVALANCHE_FUJI_RPC_URL", "https://api.avax-test.network/ext/bc/C/rpc"),
+      fallbackRpcs: ["https://avalanche-fuji-c-chain-rpc.publicnode.com"],
       viem: avalancheFuji,
       explorer: "https://testnet.snowtrace.io",
       gasToken: "AVAX",

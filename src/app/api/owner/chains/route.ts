@@ -42,6 +42,7 @@ export async function GET() {
           key: c.key,
           name: c.name,
           chainId: c.chainId,
+          gasToken: c.gasToken,
           configured: !!cfg,
           inPolicy: policyChains.has(c.chainId),
           eth: bal ? bal.eth.toString() : null,

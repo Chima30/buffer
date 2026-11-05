@@ -11,7 +11,7 @@
  * The same treasury address is used on every EVM chain in ./chains.
  */
 import bs58 from "bs58";
-import { createPublicClient, decodeEventLog, erc20Abi, http, keccak256, parseTransaction, recoverTransactionAddress, serializeTransaction, type Hex, type TransactionSerializableEIP1559 } from "viem";
+import { createPublicClient, decodeEventLog, erc20Abi, fallback, http, keccak256, parseTransaction, recoverTransactionAddress, serializeTransaction, type Hex, type TransactionSerializableEIP1559 } from "viem";
 import { publicKeyToAddress } from "viem/accounts";
 import { chainById, evmChains, type EvmChainInfo } from "./chains";
 import { nearConfig, sepoliaConfig } from "./env";
@@ -41,7 +41,9 @@ export async function treasury(): Promise<`0x${string}`> {
 
 export const clientFor = (chainId: number) => {
   const c = chainById(chainId);
-  return createPublicClient({ chain: c.viem, transport: http(c.rpcUrl) });
+  // Public testnet RPCs rate-limit: fall back to the next one on errors.
+  const urls = [c.rpcUrl, ...(c.fallbackRpcs ?? [])];
+  return createPublicClient({ chain: c.viem, transport: fallback(urls.map((u) => http(u, { timeout: 8_000, retryCount: 0 }))) });
 };
 export const sepoliaClient = () => clientFor(11155111);
 
