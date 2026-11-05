@@ -118,7 +118,7 @@ export default function Home() {
         </div>
       </section>
 
-      <footer className="border-t border-rule pt-6 text-sm text-ink-3">Built at NEAR HACKATHON 2026. Testnet only, no real funds.</footer>
+      <footer className="border-t border-rule pt-6 text-sm text-ink-3">Testnet only. No real funds.</footer>
     </main>
   );
 }
