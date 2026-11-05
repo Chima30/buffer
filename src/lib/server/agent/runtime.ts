@@ -355,7 +355,7 @@ async function stepAwaitEvm(order: OrderRow, ctx: BusinessContext, proc: { id: s
   return { next: "draft" };
 }
 
-async function stepDraft(order: OrderRow, ctx: BusinessContext): Promise<StepResult> {
+async function stepDraft(order: OrderRow, ctx: BusinessContext, attempt = 1): Promise<StepResult> {
   const proc = await db().from("procurements").select("status,onchain_index,chain,evm_tx_hash,amount_units").eq("order_id", order.id).eq("status", "confirmed").maybeSingle();
   let dataset: unknown = null;
   if (proc.data) {
@@ -372,10 +372,11 @@ async function stepDraft(order: OrderRow, ctx: BusinessContext): Promise<StepRes
     purpose: "draft",
     messages: draftMessages(order.brief, order.plan ?? { title: ctx.product.title, angles: [] }, dataset, order.quote ? DEPTH_WORDS[order.quote.depth] : undefined),
     maxTokens: order.quote ? DEPTH_TOKENS[order.quote.depth] : 1600,
-    idempotencyKey: `${order.id}:draft`,
+    // A retry must really ask again: reusing the stored answer would return the same bad draft.
+    idempotencyKey: attempt <= 1 ? `${order.id}:draft` : `${order.id}:draft:r${attempt}`,
   });
   const content = out.content.trim();
-  if (content.length < 200) throw new Error("Draft too short; will retry");
+  if (content.length < 200) throw new Error(`Draft too short (${content.length} characters); will retry with a fresh call`);
   const hash = sha256(content);
   await db().from("reports").upsert({ order_id: order.id, content, content_hash: hash, inference_call_id: out.inferenceCallId, storage_path: null }, { onConflict: "order_id" });
   return { next: "deliver" };
