@@ -41,7 +41,7 @@ You'll see payments, vendor purchases and payouts, along with their status. Rows
 
 Open [/verify](https://buffer-zeta.vercel.app/verify) and select **Try a settled cross-chain order**, or enter an order link or ID.
 
-<img src="docs/screenshots/verify.png" width="560" alt="Verify page for order o-3438af14498a: 16 checks passed and 0 failed against NEAR testnet, Avalanche Fuji and the NEAR MPC network">
+<img src="docs/screenshots/verify.png" width="560" alt="Verify page for quote order q-b0ee9cbfb8bd: 14 checks passed and 0 failed against NEAR testnet, including the payment, the on-chain report hash and the settlement using the quote's own expense cap">
 
 You can also verify an order yourself from the terminal:
 
@@ -242,6 +242,8 @@ For example, it can enter **lean mode**, where optional datasets are skipped for
 Actions that involve moving money or changing business rules are sent to the owner for approval.
 
 Every detected risk and proposed or completed action is recorded.
+
+![Owner console, Business health tab: healthy status, 73.5% net margin over 7 days, cost per order, data and gas runway, savings from vendor competition, 14 days of actual cash flow with a labelled 7-day forecast, and upcoming obligations](docs/screenshots/business-health.png)
 
 ## Security: what stops the agent from misusing funds?
 
