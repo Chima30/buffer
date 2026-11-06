@@ -1,0 +1,1 @@
+Buffer: an autonomous business on NEAR. The owner sets the rules, an AI agent runs the business, a NEAR contract holds the money and enforces the rules.
