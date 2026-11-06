@@ -38,6 +38,14 @@ const PROOF = [
   { href: "/verify", icon: Terminal, title: "Verify an order", body: "Re-check any order against the public chains, right here or with npm run verify" },
 ] as const;
 
+const REPO = "https://github.com/Chima30/buffer";
+const FOOTER: [string, [string, string][]][] = [
+  ["Product", [["Store", "/store"], ["Owner console", "/app"], ["My orders", "/me"], ["Start a business", "/new"]]],
+  ["Proof", [["Public ledger", "/ledger"], ["Verify an order", "/verify"], ["Red team", "/security"], ["proof.json", "/proof.json"]]],
+  ["Docs", [["README", `${REPO}#readme`], ["PROOF.md", `${REPO}/blob/main/PROOF.md`], ["Contract", `${REPO}/tree/main/contract`]]],
+  ["Source", [["GitHub", REPO], ["License (MIT)", `${REPO}/blob/main/LICENSE`]]],
+];
+
 export default function Home() {
   return (
     <main className="enter space-y-16">
@@ -118,7 +126,25 @@ export default function Home() {
         </div>
       </section>
 
-      <footer className="border-t border-rule pt-6 text-sm text-ink-3">Testnet only. No real funds.</footer>
+      <footer className="border-t border-rule pt-8 text-sm">
+        <div className="grid grid-cols-2 gap-8 sm:grid-cols-4">
+          {FOOTER.map(([heading, links]) => (
+            <div key={heading}>
+              <h2 className="font-mono text-xs uppercase tracking-[0.12em] text-ink-3">{heading}</h2>
+              <ul className="mt-3 space-y-2">
+                {links.map(([label, href]) => (
+                  <li key={label}>
+                    <a href={href} {...(href.startsWith("http") ? { target: "_blank", rel: "noreferrer" } : {})} className="text-ink-2 transition-colors hover:text-ink">
+                      {label}
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+        <p className="mt-8 text-ink-3">Testnet only. No real funds.</p>
+      </footer>
     </main>
   );
 }

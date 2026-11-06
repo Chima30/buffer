@@ -23,6 +23,8 @@ Customers can:
 
 **Live demo:** https://buffer-zeta.vercel.app
 
+**Proof:** [`/proof.json`](https://buffer-zeta.vercel.app/proof.json) lists every real transaction, settled order and red-team result, built live from the ledger. [PROOF.md](PROOF.md) explains how to check each one yourself.
+
 **NEAR Hackathon 2026 tracks:** Autonomous Business (`business`), Agent Economy (`agents`) and AI Security (`security`).
 
 Testnet only. No real funds are involved.
