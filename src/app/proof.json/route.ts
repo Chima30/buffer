@@ -9,6 +9,7 @@ import { db } from "@/lib/server/db";
 import { nearConfig } from "@/lib/server/env";
 import { treasury } from "@/lib/server/evm";
 import { latestRedteamRun } from "@/lib/server/redteam";
+import { viewFunction } from "@/lib/server/near-rpc";
 
 const usdc = (units: string | number | null) => (units == null ? null : (Number(units) / 1e6).toFixed(6));
 
@@ -24,6 +25,8 @@ export async function GET(req: Request) {
     latestRedteamRun().catch(() => null),
     treasury().catch(() => null),
   ]);
+  // Read the anchor straight from the contract, so the check does not rest on our database.
+  const onchain = await viewFunction<{ policy_version: number; policy_hash: string | null }>(near.contractId, "get_config").catch(() => null);
   const policy = biz.data
     ? (await db().from("policies").select("version,rules_hash,onchain_tx,activated_at").eq("business_id", biz.data.id).eq("status", "active").maybeSingle()).data
     : null;
@@ -59,7 +62,15 @@ export async function GET(req: Request) {
       evm_treasury_note: "derived by the NEAR MPC network for (business contract, 'buffer-treasury'); no one holds its private key",
     },
     policy: policy
-      ? { version: policy.version, sha256: policy.rules_hash, anchored_by_tx: policy.onchain_tx, explorer_url: policy.onchain_tx ? near.explorerTxUrl(policy.onchain_tx) : null, active_since: policy.activated_at }
+      ? {
+          version: policy.version,
+          sha256: policy.rules_hash,
+          active_since: policy.activated_at,
+          onchain_anchor: onchain
+            ? { contract: near.contractId, method: "get_config", policy_version: onchain.policy_version, policy_hash: onchain.policy_hash, matches: onchain.policy_version === policy.version && onchain.policy_hash === policy.rules_hash }
+            : null,
+          ...(policy.onchain_tx ? { anchored_by_tx: policy.onchain_tx, explorer_url: near.explorerTxUrl(policy.onchain_tx) } : {}),
+        }
       : null,
     counts: { settled_orders: orders.data?.length ?? 0, ledger_entries: entries.length, by_status: counts },
     settled_orders: (orders.data ?? []).map((o) => ({
