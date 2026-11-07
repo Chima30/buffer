@@ -1,5 +1,9 @@
 # Buffer
 
+Giving an AI agent control of business money is risky, but having someone approve every action makes it hard to let it work independently.
+
+Buffer gives the agent room to run the business while the owner sets the rules and a NEAR smart contract keeps the money under control.
+
 **An autonomous business on NEAR. The owner sets the rules, AI runs the business, and a smart contract protects the money.**
 
 Buffer is an experiment in running a business with an AI agent instead of a large team.

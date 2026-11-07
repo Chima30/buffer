@@ -52,7 +52,8 @@ export default function Home() {
       <section className="grid items-center gap-10 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
         <div>
           <p className="text-sm text-ink-3">Verified Research Desk, live on NEAR testnet</p>
-          <h1 className="mt-4 text-4xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[52px]">Humans set the rules. Agents run the business.</h1>
+          <p className="mt-3 text-base font-medium text-accent">Let AI run your business without giving it direct control over your money.</p>
+          <h1 className="mt-3 text-4xl font-medium leading-[1.05] tracking-[-0.03em] sm:text-[52px]">Humans set the rules. Agents run the business.</h1>
           <p className="mt-5 max-w-[34rem] text-lg leading-[1.6] text-ink-2">
             An AI agent sells research briefs, buys the data it needs and pays its team. A NEAR contract holds the money and enforces the owner&apos;s limits on every payment.
           </p>
